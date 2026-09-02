@@ -1255,6 +1255,17 @@ def get_customers():
 
     return jsonify([dict(c) for c in customers])
 
+@app.route('/api/customers/<id>', methods=['GET'])
+def get_customer(id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM customers WHERE id = ? AND deleted_at IS NULL', (id,))
+    customer = cursor.fetchone()
+    conn.close()
+    if not customer:
+        return jsonify({'error': 'Müşteri bulunamadı'}), 404
+    return jsonify(_as_dict(customer))
+
 @app.route('/api/customers', methods=['POST'])
 def create_customer():
     data = request.json or {}
@@ -2401,7 +2412,7 @@ def create_finance_transaction():
         return jsonify({'error': 'Gerekli alanlar eksik'}), 400
     
     transaction_id = str(uuid.uuid4())
-    user_id = request.headers.get('X-User-ID', 'admin')
+    user_id = get_current_user_id()
     
     conn = get_db()
     cursor = conn.cursor()
@@ -2428,6 +2439,18 @@ def create_finance_transaction():
         'amount': amount,
         'message': 'Finans işlemi kaydedildi'
     }), 201
+
+@app.route('/api/finance/transactions/<id>', methods=['DELETE'])
+def delete_finance_transaction(id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM finance_transactions WHERE id = ?', (id,))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'İşlem bulunamadı'}), 404
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'İşlem silindi'})
 
 @app.route('/api/finance/summary', methods=['GET'])
 def get_finance_summary():

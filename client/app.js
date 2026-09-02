@@ -806,7 +806,8 @@ async function saveCustomer(formData) {
         loadCustomers();
         showToast(customerId ? 'Müşteri güncellendi' : 'Müşteri oluşturuldu', 'success');
     } catch (error) {
-        showToast('İşlem hatası', 'error');
+        console.error('Müşteri kaydedilirken hata:', error);
+        showToast(error.message || 'İşlem hatası', 'error');
     }
 }
 
@@ -1209,7 +1210,49 @@ async function deleteTransaction(transactionId) {
         loadFinanceSummary();
         showToast('İşlem silindi', 'success');
     } catch (error) {
-        showToast('İşlem silme hatası', 'error');
+        console.error('İşlem silinirken hata:', error);
+        showToast(error.message || 'İşlem silme hatası', 'error');
+    }
+}
+
+function openTransactionModal() {
+    document.getElementById('transaction-form').reset();
+    document.getElementById('transaction-id').value = '';
+    document.getElementById('transaction-modal-title').textContent = 'Yeni Finans İşlemi';
+    openModal('transaction-modal');
+}
+
+async function saveTransaction(formData) {
+    try {
+        const transactionData = {
+            transaction_type: formData.get('transaction_type'),
+            amount: parseFloat(formData.get('amount')) || 0,
+            category: formData.get('category') || null,
+            description: formData.get('description') || null,
+            payment_method: formData.get('payment_method') || null
+        };
+
+        if (!transactionData.transaction_type) {
+            showToast('İşlem türü seçmelisiniz', 'error');
+            return;
+        }
+        if (transactionData.amount <= 0) {
+            showToast('Tutar sıfırdan büyük olmalıdır', 'error');
+            return;
+        }
+
+        await apiRequest('/finance/transactions', {
+            method: 'POST',
+            body: JSON.stringify(transactionData)
+        });
+
+        closeModal();
+        loadFinanceTransactions();
+        loadFinanceSummary();
+        showToast('Finans işlemi kaydedildi', 'success');
+    } catch (error) {
+        console.error('Finans işlemi kaydedilirken hata:', error);
+        showToast(error.message || 'İşlem hatası', 'error');
     }
 }
 
@@ -1904,6 +1947,16 @@ function initializeEventListeners() {
     // Finance
     document.getElementById('transaction-type-filter').addEventListener('change', (e) => {
         loadFinanceTransactions(1, e.target.value);
+    });
+
+    document.getElementById('add-transaction-btn').addEventListener('click', () => {
+        openTransactionModal();
+    });
+
+    document.getElementById('transaction-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveTransaction(formData);
     });
 
     // Activity
