@@ -156,6 +156,7 @@ def migrate_db():
     add_column_if_missing(conn, 'customers', 'deleted_at', 'TIMESTAMP')
     add_column_if_missing(conn, 'orders', 'deleted_at', 'TIMESTAMP')
     add_column_if_missing(conn, 'categories', 'deleted_at', 'TIMESTAMP')
+    add_column_if_missing(conn, 'categories', 'updated_at', 'TIMESTAMP')
 
     # Order shipping tracking columns
     add_column_if_missing(conn, 'orders', 'tracking_number', 'TEXT')
@@ -394,6 +395,7 @@ def init_db():
             parent_id TEXT,
             image_url TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (parent_id) REFERENCES categories(id)
         )
     ''')
@@ -878,14 +880,19 @@ def create_category():
         return jsonify({'error': 'Kategori adı gerekli'}), 400
 
     category_id = str(uuid.uuid4())
+    parent_id = data.get('parent_id') or None
+    image_url = data.get('image_url') or None
+    description = data.get('description') or None
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO categories (id, name, description, parent_id, image_url)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (category_id, name, data.get('description'), data.get('parent_id'), data.get('image_url')))
-    conn.commit()
-    conn.close()
+    try:
+        cursor.execute('''
+            INSERT INTO categories (id, name, description, parent_id, image_url)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (category_id, name, description, parent_id, image_url))
+        conn.commit()
+    finally:
+        conn.close()
 
     log_activity('create', 'category', category_id, {'name': name})
     return jsonify({
@@ -903,17 +910,22 @@ def update_category(id):
     if not name:
         return jsonify({'error': 'Kategori adı gerekli'}), 400
 
+    parent_id = data.get('parent_id') or None
+    image_url = data.get('image_url') or None
+    description = data.get('description') or None
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE categories SET name = ?, description = ?, parent_id = ?, image_url = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND deleted_at IS NULL
-    ''', (name, data.get('description'), data.get('parent_id'), data.get('image_url'), id))
-    if cursor.rowcount == 0:
+    try:
+        cursor.execute('''
+            UPDATE categories SET name = ?, description = ?, parent_id = ?, image_url = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND deleted_at IS NULL
+        ''', (name, description, parent_id, image_url, id))
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Kategori bulunamadı'}), 404
+        conn.commit()
+    finally:
         conn.close()
-        return jsonify({'error': 'Kategori bulunamadı'}), 404
-    conn.commit()
-    conn.close()
 
     log_activity('update', 'category', id, {'name': name})
     return jsonify({'message': 'Kategori güncellendi'})
@@ -1050,45 +1062,47 @@ def create_product():
     packaging_cost = float(data.get('packaging_cost') or 0)
     commission = float(data.get('commission') or 0)
     other_costs = float(data.get('other_costs') or 0)
-    low_stock_threshold = int(data.get('low_stock_threshold', 10))
-    category_id = data.get('category_id')
-    barcode = data.get('barcode')
-    image_url = data.get('image_url')
+    low_stock_threshold = int(data.get('low_stock_threshold') or 10)
+    category_id = data.get('category_id') or None
+    barcode = data.get('barcode') or None
+    image_url = data.get('image_url') or None
     is_active = data.get('is_active', True)
-    description = data.get('description')
+    description = data.get('description') or None
 
     conn = get_db()
     cursor = conn.cursor()
 
-    category_name = None
-    if category_id:
-        cursor.execute('SELECT name FROM categories WHERE id = ? AND deleted_at IS NULL', (category_id,))
-        row = cursor.fetchone()
-        if row:
-            category_name = row['name']
+    try:
+        category_name = None
+        if category_id:
+            cursor.execute('SELECT name FROM categories WHERE id = ? AND deleted_at IS NULL', (category_id,))
+            row = cursor.fetchone()
+            if row:
+                category_name = row['name']
 
-    provided_sku = data.get('sku')
-    if provided_sku:
-        provided_sku = str(provided_sku).strip().upper()
-        if sku_exists(provided_sku):
-            conn.close()
-            return jsonify({'error': f'SKU {provided_sku} zaten kullanımda'}), 400
-        sku = provided_sku
-    else:
-        sku = generate_sku(name, category=category_name)
+        provided_sku = data.get('sku')
+        if provided_sku:
+            provided_sku = str(provided_sku).strip().upper()
+            if sku_exists(provided_sku):
+                conn.close()
+                return jsonify({'error': f'SKU {provided_sku} zaten kullanımda'}), 400
+            sku = provided_sku
+        else:
+            sku = generate_sku(name, category=category_name)
 
-    product_id = str(uuid.uuid4())
-    cursor.execute('''
-        INSERT INTO products (id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (product_id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs))
+        product_id = str(uuid.uuid4())
+        cursor.execute('''
+            INSERT INTO products (id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (product_id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs))
 
-    if stock_quantity > 0:
-        _insert_stock_movement(cursor, product_id, stock_quantity, 'initial', notes='İlk stok girişi')
+        if stock_quantity > 0:
+            _insert_stock_movement(cursor, product_id, stock_quantity, 'initial', notes='İlk stok girişi')
 
-    cursor.execute('INSERT INTO sku_registry (sku, entity_type, entity_id) VALUES (?, ?, ?)', (sku, 'product', product_id))
-    conn.commit()
-    conn.close()
+        cursor.execute('INSERT INTO sku_registry (sku, entity_type, entity_id) VALUES (?, ?, ?)', (sku, 'product', product_id))
+        conn.commit()
+    finally:
+        conn.close()
 
     log_activity('create', 'product', product_id, {'name': name, 'sku': sku, 'stock_quantity': stock_quantity})
 
@@ -1124,8 +1138,11 @@ def update_product(id):
         conn.close()
         return jsonify({'error': 'Ürün bulunamadı'}), 404
 
-    name = data.get('name', product['name'])
-    price = data.get('price', product['price'])
+    product = _as_dict(product)
+    name = data.get('name') or product['name']
+    price = data.get('price')
+    if price is None:
+        price = product['price']
     try:
         price = float(price)
         if price < 0:
@@ -1143,7 +1160,6 @@ def update_product(id):
         conn.close()
         return jsonify({'error': 'Stok miktarı negatif olamaz'}), 400
 
-    product = _as_dict(product)
     old_stock = int(product.get('stock_quantity') or 0)
     stock_diff = stock_quantity - old_stock
 
@@ -1152,6 +1168,17 @@ def update_product(id):
     commission = float(data.get('commission', product.get('commission')) or 0)
     other_costs = float(data.get('other_costs', product.get('other_costs')) or 0)
     low_stock_threshold = int(data.get('low_stock_threshold', product.get('low_stock_threshold')) or 10)
+    category_id = data.get('category_id')
+    if category_id == '':
+        category_id = None
+    elif category_id is None:
+        category_id = product.get('category_id')
+    barcode = data.get('barcode', product.get('barcode')) or None
+    image_url = data.get('image_url', product.get('image_url')) or None
+    description = data.get('description', product.get('description')) or None
+    is_active = data.get('is_active')
+    if is_active is None:
+        is_active = product.get('is_active', 1)
 
     old_sku = product['sku']
     new_sku = data.get('sku', old_sku)
@@ -1171,10 +1198,9 @@ def update_product(id):
         packaging_cost = ?, commission = ?, other_costs = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
     ''', (
-        name, data.get('description', product['description']), price, cost_price, stock_quantity,
-        data.get('category_id', product['category_id']), sku,
-        data.get('barcode', product['barcode']), data.get('image_url', product['image_url']),
-        data.get('is_active', product.get('is_active', 1)), low_stock_threshold,
+        name, description, price, cost_price, stock_quantity,
+        category_id, sku, barcode, image_url,
+        is_active, low_stock_threshold,
         packaging_cost, commission, other_costs, id
     ))
 
