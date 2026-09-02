@@ -570,6 +570,19 @@ async function viewOrderDetail(orderId) {
                 <div><strong>Toplam:</strong> ₺${order.total.toFixed(2)}</div>
                 <div><strong>Notlar:</strong> ${order.notes || '-'}</div>
             </div>
+            <div class="order-status-update" style="margin: 15px 0; padding: 15px; border: 1px solid var(--border-color); border-radius: 4px;">
+                <label><strong>Sipariş Durumunu Güncelle</strong></label>
+                <select id="order-detail-status" class="form-control" style="margin: 8px 0; padding: 5px; width: 100%;">
+                    <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Bekliyor</option>
+                    <option value="processing" ${order.status === 'processing' ? 'selected' : ''}>İşleniyor</option>
+                    <option value="shipped" ${order.status === 'shipped' ? 'selected' : ''}>Kargolandı</option>
+                    <option value="delivered" ${order.status === 'delivered' ? 'selected' : ''}>Teslim Edildi</option>
+                    <option value="cancelled" ${order.status === 'cancelled' ? 'selected' : ''}>İptal Edildi</option>
+                </select>
+                <button type="button" class="btn btn-primary" id="update-order-status-btn">
+                    <i class="fas fa-save"></i> Durumu Kaydet
+                </button>
+            </div>
             <h4>Sipariş Ürünleri</h4>
             <table class="table">
                 <thead>
@@ -594,9 +607,29 @@ async function viewOrderDetail(orderId) {
         `;
 
         document.getElementById('order-detail-content').innerHTML = content;
+
+        document.getElementById('update-order-status-btn').addEventListener('click', () => {
+            const status = document.getElementById('order-detail-status').value;
+            updateOrderStatus(orderId, status);
+        });
+
         openModal('order-detail-modal');
     } catch (error) {
         showToast('Sipariş detayı yüklenirken hata', 'error');
+    }
+}
+
+async function updateOrderStatus(orderId, status) {
+    try {
+        await apiRequest(`/orders/${orderId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status })
+        });
+        showToast('Sipariş durumu güncellendi', 'success');
+        loadOrders();
+        closeModal();
+    } catch (error) {
+        showToast('Sipariş durumu güncellenirken hata', 'error');
     }
 }
 

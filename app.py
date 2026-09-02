@@ -1054,9 +1054,24 @@ def update_order(id):
     status = data.get('status')
     notes = data.get('notes')
     
+    if status is None and notes is None:
+        return jsonify({'error': 'Güncellenecek durum veya not gönderilmeli'}), 400
+    
+    fields = []
+    params = []
+    if status is not None:
+        fields.append('status = ?')
+        params.append(status)
+    if notes is not None:
+        fields.append('notes = ?')
+        params.append(notes)
+    
+    params.append(id)
+    query = f"UPDATE orders SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('UPDATE orders SET status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (status, notes, id))
+    cursor.execute(query, tuple(params))
     conn.commit()
     conn.close()
     
