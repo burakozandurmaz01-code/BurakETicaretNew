@@ -1,0 +1,1795 @@
+// API Configuration
+const API_BASE_URL = 'http://localhost:5000/api';
+
+// State Management
+let currentUser = null;
+let authToken = null;
+let currentTheme = 'light';
+let salesChart = null;
+
+// DOM Elements
+const loginScreen = document.getElementById('login-screen');
+const mainApp = document.getElementById('main-app');
+const loginForm = document.getElementById('login-form');
+const modalOverlay = document.getElementById('modal-overlay');
+
+// Initialize App
+document.addEventListener('DOMContentLoaded', () => {
+    checkAuth();
+    initializeEventListeners();
+    initializeTheme();
+});
+
+// Authentication
+function checkAuth() {
+    authToken = localStorage.getItem('authToken');
+    currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+    
+    if (authToken && currentUser) {
+        showMainApp();
+        loadDashboard();
+    } else {
+        showLoginScreen();
+    }
+}
+
+function showLoginScreen() {
+    loginScreen.classList.remove('hidden');
+    mainApp.classList.add('hidden');
+}
+
+function showMainApp() {
+    loginScreen.classList.add('hidden');
+    mainApp.classList.remove('hidden');
+    applyTheme(currentUser.theme || 'light');
+}
+
+async function login(username, password) {
+    try {
+        const response = await fetch(`${API_BASE_URL}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            authToken = data.token;
+            currentUser = data.user;
+            localStorage.setItem('authToken', authToken);
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            showMainApp();
+            loadDashboard();
+            showToast('Giriş başarılı', 'success');
+        } else {
+            showToast(data.error || 'Giriş başarısız', 'error');
+        }
+    } catch (error) {
+        showToast('Sunucu hatası', 'error');
+    }
+}
+
+function logout() {
+    authToken = null;
+    currentUser = null;
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('currentUser');
+    showLoginScreen();
+    showToast('Çıkış yapıldı', 'info');
+}
+
+// Theme Management
+function initializeTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    currentTheme = savedTheme;
+    applyTheme(savedTheme);
+}
+
+function applyTheme(theme) {
+    currentTheme = theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+    
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+        const icon = themeToggle.querySelector('i');
+        icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+    }
+}
+
+async function changeTheme(theme) {
+    try {
+        const response = await fetch(`${API_BASE_URL}/users/theme`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ theme })
+        });
+
+        if (response.ok) {
+            applyTheme(theme);
+            if (currentUser) {
+                currentUser.theme = theme;
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            }
+            showToast('Tema değiştirildi', 'success');
+        }
+    } catch (error) {
+        showToast('Tema değiştirme hatası', 'error');
+    }
+}
+
+// API Helper
+async function apiRequest(endpoint, options = {}) {
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-User-ID': currentUser?.id || 'admin',
+        ...options.headers
+    };
+
+    if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+    }
+
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...options,
+        headers
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+        throw new Error(data.error || 'API hatası');
+    }
+
+    return data;
+}
+
+// Dashboard
+async function loadDashboard() {
+    try {
+        const stats = await apiRequest('/dashboard/stats');
+        updateDashboardStats(stats);
+
+        const recentOrders = await apiRequest('/dashboard/recent-orders');
+        updateRecentOrdersTable(recentOrders);
+
+        const salesData = await apiRequest('/dashboard/sales-chart?days=30');
+        updateSalesChart(salesData);
+    } catch (error) {
+        console.error('Dashboard yüklenirken hata:', error);
+    }
+}
+
+function updateDashboardStats(stats) {
+    document.getElementById('total-products').textContent = stats.total_products || 0;
+    document.getElementById('total-customers').textContent = stats.total_customers || 0;
+    document.getElementById('total-orders').textContent = stats.total_orders || 0;
+    document.getElementById('total-revenue').textContent = `₺${(stats.total_revenue || 0).toFixed(2)}`;
+    document.getElementById('pending-orders').textContent = stats.pending_orders || 0;
+    document.getElementById('low-stock').textContent = stats.low_stock || 0;
+}
+
+function updateRecentOrdersTable(orders) {
+    const tbody = document.getElementById('recent-orders-table');
+    
+    if (orders.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center">Sipariş bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = orders.map(order => `
+        <tr>
+            <td>${order.order_number}</td>
+            <td>${order.customer_name || '-'}</td>
+            <td>₺${order.total.toFixed(2)}</td>
+            <td><span class="badge badge-${getStatusBadgeClass(order.status)}">${getStatusLabel(order.status)}</span></td>
+            <td>${formatDate(order.created_at)}</td>
+        </tr>
+    `).join('');
+}
+
+function updateSalesChart(salesData) {
+    const ctx = document.getElementById('sales-chart').getContext('2d');
+    
+    if (salesChart) {
+        salesChart.destroy();
+    }
+
+    salesChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: salesData.map(s => formatDate(s.date)),
+            datasets: [{
+                label: 'Satış (₺)',
+                data: salesData.map(s => s.total || 0),
+                borderColor: '#2563eb',
+                backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+}
+
+// Products
+async function loadProducts(page = 1, search = '') {
+    try {
+        const data = await apiRequest(`/products?page=${page}&search=${encodeURIComponent(search)}`);
+        updateProductsTable(data.products);
+        updatePagination('products-pagination', data.page, data.totalPages, loadProducts);
+    } catch (error) {
+        console.error('Ürünler yüklenirken hata:', error);
+    }
+}
+
+function updateProductsTable(products) {
+    const tbody = document.getElementById('products-table');
+    
+    if (products.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">Ürün bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = products.map(product => `
+        <tr>
+            <td>${product.image_url ? `<img src="${API_BASE_URL}${product.image_url}" alt="${product.name}">` : '<div class="no-image">-</div>'}</td>
+            <td>${product.name}</td>
+            <td>${product.category_name || '-'}</td>
+            <td>₺${product.price.toFixed(2)}</td>
+            <td>${product.stock_quantity}</td>
+            <td><span class="badge badge-${product.is_active ? 'success' : 'secondary'}">${product.is_active ? 'Aktif' : 'Pasif'}</span></td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="editProduct('${product.id}')">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button class="btn btn-sm btn-icon" onclick="deleteProduct('${product.id}')">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function saveProduct(formData) {
+    try {
+        const productId = document.getElementById('product-id').value;
+        const url = productId ? `/products/${productId}` : '/products';
+        const method = productId ? 'PUT' : 'POST';
+
+        const productData = {
+            name: formData.get('name'),
+            description: formData.get('description'),
+            price: parseFloat(formData.get('price')),
+            cost_price: formData.get('cost_price') ? parseFloat(formData.get('cost_price')) : null,
+            stock_quantity: parseInt(formData.get('stock_quantity')),
+            category_id: formData.get('category_id') || null,
+            sku: formData.get('sku') || null,
+            barcode: formData.get('barcode') || null,
+            is_active: formData.get('is_active') === 'on'
+        };
+
+        const response = await apiRequest(url, {
+            method,
+            body: JSON.stringify(productData)
+        });
+
+        const data = await response;
+
+        if (response.ok) {
+            // Save variations if this is a new product
+            if (!productId) {
+                const variations = collectVariations(data.id);
+                if (variations.length > 0) {
+                    await saveProductVariations(data.id, variations);
+                }
+            }
+
+            closeModal();
+            loadProducts();
+            showToast(productId ? 'Ürün güncellendi' : 'Ürün oluşturuldu', 'success');
+        } else {
+            showToast(data.error || 'İşlem hatası', 'error');
+        }
+    } catch (error) {
+        showToast('Sunucu hatası', 'error');
+    }
+}
+
+async function editProduct(productId) {
+    try {
+        const product = await apiRequest(`/products/${productId}`);
+        
+        document.getElementById('product-id').value = product.id;
+        document.getElementById('product-name').value = product.name;
+        document.getElementById('product-description').value = product.description || '';
+        document.getElementById('product-price').value = product.price;
+        document.getElementById('product-cost').value = product.cost_price || '';
+        document.getElementById('product-stock').value = product.stock_quantity;
+        document.getElementById('product-category').value = product.category_id || '';
+        document.getElementById('product-sku').value = product.sku || '';
+        document.getElementById('product-barcode').value = product.barcode || '';
+        document.getElementById('product-active').checked = product.is_active;
+
+        document.getElementById('product-modal-title').textContent = 'Ürün Düzenle';
+        openModal('product-modal');
+        
+        await loadCategories();
+    } catch (error) {
+        showToast('Ürün yüklenirken hata', 'error');
+    }
+}
+
+async function deleteProduct(productId) {
+    if (!confirm('Bu ürünü silmek istediğinize emin misiniz?')) return;
+
+    try {
+        await apiRequest(`/products/${productId}`, { method: 'DELETE' });
+        loadProducts();
+        showToast('Ürün silindi', 'success');
+    } catch (error) {
+        showToast('Ürün silme hatası', 'error');
+    }
+}
+
+// Categories
+async function loadCategories() {
+    try {
+        const categories = await apiRequest('/categories');
+        updateCategoriesTable(categories);
+        updateCategorySelects(categories);
+    } catch (error) {
+        console.error('Kategoriler yüklenirken hata:', error);
+    }
+}
+
+function updateCategoriesTable(categories) {
+    const tbody = document.getElementById('categories-table');
+    
+    if (categories.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center">Kategori bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = categories.map(category => `
+        <tr>
+            <td>${category.name}</td>
+            <td>${category.description || '-'}</td>
+            <td>-</td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="editCategory('${category.id}')">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button class="btn btn-sm btn-icon" onclick="deleteCategory('${category.id}')">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function updateCategorySelects(categories) {
+    const selects = [
+        document.getElementById('product-category'),
+        document.getElementById('category-parent')
+    ];
+
+    selects.forEach(select => {
+        if (!select) return;
+        
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">Seçiniz</option>';
+        
+        categories.forEach(category => {
+            const option = document.createElement('option');
+            option.value = category.id;
+            option.textContent = category.name;
+            select.appendChild(option);
+        });
+
+        select.value = currentValue;
+    });
+}
+
+async function saveCategory(formData) {
+    try {
+        const categoryId = document.getElementById('category-id').value;
+        const url = categoryId ? `/categories/${categoryId}` : '/categories';
+        const method = categoryId ? 'PUT' : 'POST';
+
+        const categoryData = {
+            name: formData.get('name'),
+            description: formData.get('description'),
+            parent_id: formData.get('parent_id') || null
+        };
+
+        await apiRequest(url, {
+            method,
+            body: JSON.stringify(categoryData)
+        });
+
+        closeModal();
+        loadCategories();
+        showToast(categoryId ? 'Kategori güncellendi' : 'Kategori oluşturuldu', 'success');
+    } catch (error) {
+        showToast('İşlem hatası', 'error');
+    }
+}
+
+async function editCategory(categoryId) {
+    try {
+        const category = await apiRequest(`/categories/${categoryId}`);
+        
+        document.getElementById('category-id').value = category.id;
+        document.getElementById('category-name').value = category.name;
+        document.getElementById('category-description').value = category.description || '';
+        document.getElementById('category-parent').value = category.parent_id || '';
+
+        document.getElementById('category-modal-title').textContent = 'Kategori Düzenle';
+        openModal('category-modal');
+    } catch (error) {
+        showToast('Kategori yüklenirken hata', 'error');
+    }
+}
+
+async function deleteCategory(categoryId) {
+    if (!confirm('Bu kategoriyi silmek istediğinize emin misiniz?')) return;
+
+    try {
+        await apiRequest(`/categories/${categoryId}`, { method: 'DELETE' });
+        loadCategories();
+        showToast('Kategori silindi', 'success');
+    } catch (error) {
+        showToast('Kategori silme hatası', 'error');
+    }
+}
+
+// Orders
+async function loadOrders(page = 1, status = '', search = '') {
+    try {
+        const params = new URLSearchParams({ page, status, search });
+        const data = await apiRequest(`/orders?${params}`);
+        updateOrdersTable(data.orders);
+        updatePagination('orders-pagination', data.page, data.totalPages, loadOrders);
+    } catch (error) {
+        console.error('Siparişler yüklenirken hata:', error);
+    }
+}
+
+function updateOrdersTable(orders) {
+    const tbody = document.getElementById('orders-table');
+    
+    if (orders.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center">Sipariş bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = orders.map(order => `
+        <tr>
+            <td>${order.order_number}</td>
+            <td>${order.customer_name || '-'}</td>
+            <td>₺${order.total.toFixed(2)}</td>
+            <td><span class="badge badge-${getStatusBadgeClass(order.status)}">${getStatusLabel(order.status)}</span></td>
+            <td>${formatDate(order.created_at)}</td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="viewOrderDetail('${order.id}')">
+                    <i class="fas fa-eye"></i>
+                </button>
+                <button class="btn btn-sm btn-icon" onclick="editOrder('${order.id}')">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button class="btn btn-sm btn-icon" onclick="deleteOrder('${order.id}')">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function saveOrder(formData) {
+    try {
+        const orderId = document.getElementById('order-id').value;
+        
+        // Collect order items
+        const orderItems = [];
+        document.querySelectorAll('.order-item').forEach(item => {
+            const productId = item.querySelector('.item-product').value;
+            const quantity = parseInt(item.querySelector('.item-quantity').value);
+            const unitPrice = parseFloat(item.querySelector('.item-price').value);
+
+            if (productId && quantity > 0 && unitPrice > 0) {
+                orderItems.push({
+                    product_id: productId,
+                    quantity,
+                    unit_price: unitPrice
+                });
+            }
+        });
+
+        if (orderItems.length === 0) {
+            showToast('En az bir ürün ekleyin', 'error');
+            return;
+        }
+
+        const orderData = {
+            customer_id: formData.get('customer_id'),
+            items: orderItems,
+            tax: parseFloat(formData.get('tax')) || 0,
+            shipping_cost: parseFloat(formData.get('shipping_cost')) || 0,
+            discount: parseFloat(formData.get('discount')) || 0,
+            notes: formData.get('notes') || ''
+        };
+
+        await apiRequest('/orders', {
+            method: 'POST',
+            body: JSON.stringify(orderData)
+        });
+
+        closeModal();
+        loadOrders();
+        showToast('Sipariş oluşturuldu', 'success');
+    } catch (error) {
+        showToast('İşlem hatası', 'error');
+    }
+}
+
+async function viewOrderDetail(orderId) {
+    try {
+        const order = await apiRequest(`/orders/${orderId}`);
+        
+        // Store order ID for PDF generation
+        document.getElementById('print-invoice-btn').dataset.orderId = orderId;
+        
+        const content = `
+            <div class="order-detail-info">
+                <div><strong>Sipariş No:</strong> ${order.order_number}</div>
+                <div><strong>Müşteri:</strong> ${order.customer_name || '-'}</div>
+                <div><strong>Durum:</strong> ${getStatusLabel(order.status)}</div>
+                <div><strong>Tarih:</strong> ${formatDate(order.created_at)}</div>
+                <div><strong>Ara Toplam:</strong> ₺${order.subtotal.toFixed(2)}</div>
+                <div><strong>Vergi:</strong> ₺${order.tax.toFixed(2)}</div>
+                <div><strong>Kargo:</strong> ₺${order.shipping_cost.toFixed(2)}</div>
+                <div><strong>İndirim:</strong> ₺${order.discount.toFixed(2)}</div>
+                <div><strong>Toplam:</strong> ₺${order.total.toFixed(2)}</div>
+                <div><strong>Notlar:</strong> ${order.notes || '-'}</div>
+            </div>
+            <h4>Sipariş Ürünleri</h4>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Ürün</th>
+                        <th>Miktar</th>
+                        <th>Birim Fiyat</th>
+                        <th>Toplam</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${order.items.map(item => `
+                        <tr>
+                            <td>${item.product_name || '-'}</td>
+                            <td>${item.quantity}</td>
+                            <td>₺${item.unit_price.toFixed(2)}</td>
+                            <td>₺${item.total_price.toFixed(2)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+
+        document.getElementById('order-detail-content').innerHTML = content;
+        openModal('order-detail-modal');
+    } catch (error) {
+        showToast('Sipariş detayı yüklenirken hata', 'error');
+    }
+}
+
+async function editOrder(orderId) {
+    try {
+        const order = await apiRequest(`/orders/${orderId}`);
+        
+        document.getElementById('order-id').value = order.id;
+        document.getElementById('order-customer').value = order.customer_id || '';
+        document.getElementById('order-tax').value = order.tax || 0;
+        document.getElementById('order-shipping').value = order.shipping_cost || 0;
+        document.getElementById('order-discount').value = order.discount || 0;
+        document.getElementById('order-notes').value = order.notes || '';
+
+        // Load order items
+        const orderItemsContainer = document.getElementById('order-items');
+        orderItemsContainer.innerHTML = '';
+        
+        order.items.forEach(item => {
+            addOrderItem(item.product_id, item.quantity, item.unit_price);
+        });
+
+        document.getElementById('order-modal-title').textContent = 'Sipariş Düzenle';
+        openModal('order-modal');
+        
+        await loadCustomers();
+        await loadProductsForSelect();
+    } catch (error) {
+        showToast('Sipariş yüklenirken hata', 'error');
+    }
+}
+
+async function deleteOrder(orderId) {
+    if (!confirm('Bu siparişi silmek istediğinize emin misiniz?')) return;
+
+    try {
+        await apiRequest(`/orders/${orderId}`, { method: 'DELETE' });
+        loadOrders();
+        showToast('Sipariş silindi', 'success');
+    } catch (error) {
+        showToast('Sipariş silme hatası', 'error');
+    }
+}
+
+// Customers
+async function loadCustomers(search = '') {
+    try {
+        const customers = await apiRequest(`/customers?search=${encodeURIComponent(search)}`);
+        updateCustomersTable(customers);
+    } catch (error) {
+        console.error('Müşteriler yüklenirken hata:', error);
+    }
+}
+
+function updateCustomersTable(customers) {
+    const tbody = document.getElementById('customers-table');
+    
+    if (customers.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center">Müşteri bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = customers.map(customer => `
+        <tr>
+            <td>${customer.name}</td>
+            <td>${customer.email || '-'}</td>
+            <td>${customer.phone || '-'}</td>
+            <td>${customer.city || '-'}</td>
+            <td>${customer.tax_number || '-'}</td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="editCustomer('${customer.id}')">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button class="btn btn-sm btn-icon" onclick="deleteCustomer('${customer.id}')">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function saveCustomer(formData) {
+    try {
+        const customerId = document.getElementById('customer-id').value;
+        const url = customerId ? `/customers/${customerId}` : '/customers';
+        const method = customerId ? 'PUT' : 'POST';
+
+        const customerData = {
+            name: formData.get('name'),
+            email: formData.get('email') || null,
+            phone: formData.get('phone') || null,
+            address: formData.get('address') || null,
+            city: formData.get('city') || null,
+            tax_number: formData.get('tax_number') || null,
+            tax_office: formData.get('tax_office') || null
+        };
+
+        await apiRequest(url, {
+            method,
+            body: JSON.stringify(customerData)
+        });
+
+        closeModal();
+        loadCustomers();
+        showToast(customerId ? 'Müşteri güncellendi' : 'Müşteri oluşturuldu', 'success');
+    } catch (error) {
+        showToast('İşlem hatası', 'error');
+    }
+}
+
+async function editCustomer(customerId) {
+    try {
+        const customer = await apiRequest(`/customers/${customerId}`);
+        
+        document.getElementById('customer-id').value = customer.id;
+        document.getElementById('customer-name').value = customer.name;
+        document.getElementById('customer-email').value = customer.email || '';
+        document.getElementById('customer-phone').value = customer.phone || '';
+        document.getElementById('customer-address').value = customer.address || '';
+        document.getElementById('customer-city').value = customer.city || '';
+        document.getElementById('customer-tax-no').value = customer.tax_number || '';
+        document.getElementById('customer-tax-office').value = customer.tax_office || '';
+
+        document.getElementById('customer-modal-title').textContent = 'Müşteri Düzenle';
+        openModal('customer-modal');
+    } catch (error) {
+        showToast('Müşteri yüklenirken hata', 'error');
+    }
+}
+
+async function deleteCustomer(customerId) {
+    if (!confirm('Bu müşteriyi silmek istediğinize emin misiniz?')) return;
+
+    try {
+        await apiRequest(`/customers/${customerId}`, { method: 'DELETE' });
+        loadCustomers();
+        showToast('Müşteri silindi', 'success');
+    } catch (error) {
+        showToast('Müşteri silme hatası', 'error');
+    }
+}
+
+// Stock Movements
+async function loadStockMovements(page = 1, movementType = '') {
+    try {
+        const params = new URLSearchParams({ page, movement_type: movementType });
+        const data = await apiRequest(`/stock-movements?${params}`);
+        updateStockMovementsTable(data.movements);
+        updatePagination('stock-pagination', data.page, data.totalPages, loadStockMovements);
+    } catch (error) {
+        console.error('Stok hareketleri yüklenirken hata:', error);
+    }
+}
+
+function updateStockMovementsTable(movements) {
+    const tbody = document.getElementById('stock-movements-table');
+    
+    if (movements.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">Stok hareketi bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = movements.map(movement => `
+        <tr>
+            <td>${movement.product_name || '-'}</td>
+            <td><span class="badge badge-${movement.movement_type === 'in' ? 'success' : movement.movement_type === 'out' ? 'danger' : 'warning'}">${movement.movement_type === 'in' ? 'Giriş' : movement.movement_type === 'out' ? 'Çıkış' : 'Düzeltme'}</span></td>
+            <td>${movement.quantity}</td>
+            <td>${movement.reference_id || '-'}</td>
+            <td>${movement.notes || '-'}</td>
+            <td>${formatDate(movement.created_at)}</td>
+            <td>${movement.created_by_name || '-'}</td>
+        </tr>
+    `).join('');
+}
+
+// Suppliers
+async function loadSuppliers(search = '') {
+    try {
+        const suppliers = await apiRequest(`/suppliers?search=${encodeURIComponent(search)}`);
+        updateSuppliersTable(suppliers);
+    } catch (error) {
+        console.error('Tedarikçiler yüklenirken hata:', error);
+    }
+}
+
+function updateSuppliersTable(suppliers) {
+    const tbody = document.getElementById('suppliers-table');
+    
+    if (suppliers.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center">Tedarikçi bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = suppliers.map(supplier => `
+        <tr>
+            <td>${supplier.name}</td>
+            <td>${supplier.contact_person || '-'}</td>
+            <td>${supplier.email || '-'}</td>
+            <td>${supplier.phone || '-'}</td>
+            <td>${supplier.city || '-'}</td>
+            <td>${supplier.tax_number || '-'}</td>
+            <td>${supplier.payment_terms || '-'}</td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="editSupplier('${supplier.id}')">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button class="btn btn-sm btn-icon" onclick="deleteSupplier('${supplier.id}')">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Returns
+async function loadReturns(page = 1, status = '') {
+    try {
+        const params = new URLSearchParams({ page, status });
+        const data = await apiRequest(`/returns?${params}`);
+        updateReturnsTable(data.returns);
+        updatePagination('returns-pagination', data.page, data.totalPages, loadReturns);
+    } catch (error) {
+        console.error('İadeler yüklenirken hata:', error);
+    }
+}
+
+function updateReturnsTable(returns) {
+    const tbody = document.getElementById('returns-table');
+    
+    if (returns.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center">İade bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = returns.map(ret => `
+        <tr>
+            <td>${ret.order_number || '-'}</td>
+            <td>${ret.customer_name || '-'}</td>
+            <td>${ret.return_type === 'refund' ? 'İade' : 'Değişim'}</td>
+            <td>₺${ret.refund_amount ? ret.refund_amount.toFixed(2) : '-'}</td>
+            <td><span class="badge badge-${getStatusBadgeClass(ret.status)}">${getStatusLabel(ret.status)}</span></td>
+            <td>${ret.reason || '-'}</td>
+            <td>${formatDate(ret.created_at)}</td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="updateReturnStatus('${ret.id}', 'approved')">
+                    <i class="fas fa-check"></i>
+                </button>
+                <button class="btn btn-sm btn-icon" onclick="updateReturnStatus('${ret.id}', 'rejected')">
+                    <i class="fas fa-times"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function updateReturnStatus(returnId, status) {
+    try {
+        await apiRequest(`/returns/${returnId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status })
+        });
+        loadReturns();
+        showToast('İade durumu güncellendi', 'success');
+    } catch (error) {
+        showToast('İade durumu güncellenirken hata', 'error');
+    }
+}
+
+// Coupons
+async function loadCoupons() {
+    try {
+        const coupons = await apiRequest('/coupons');
+        updateCouponsTable(coupons);
+    } catch (error) {
+        console.error('Kuponlar yüklenirken hata:', error);
+    }
+}
+
+function updateCouponsTable(coupons) {
+    const tbody = document.getElementById('coupons-table');
+    
+    if (coupons.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="text-center">Kupon bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = coupons.map(coupon => `
+        <tr>
+            <td><strong>${coupon.code}</strong></td>
+            <td>${coupon.discount_type === 'percentage' ? '%' : '₺'}</td>
+            <td>${coupon.discount_value}</td>
+            <td>₺${coupon.minimum_purchase || 0}</td>
+            <td>₺${coupon.max_discount || '-'}</td>
+            <td>${coupon.usage_limit || '∞'}</td>
+            <td>${coupon.used_count || 0}</td>
+            <td>${coupon.valid_until ? formatDate(coupon.valid_until) : 'Süresiz'}</td>
+            <td><span class="badge badge-success">Aktif</span></td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="deleteCoupon('${coupon.id}')">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function deleteCoupon(couponId) {
+    if (!confirm('Bu kuponu silmek istediğinize emin misiniz?')) return;
+
+    try {
+        await apiRequest(`/coupons/${couponId}`, { method: 'DELETE' });
+        loadCoupons();
+        showToast('Kupon silindi', 'success');
+    } catch (error) {
+        showToast('Kupon silme hatası', 'error');
+    }
+}
+
+// Finance
+async function loadFinanceSummary() {
+    try {
+        const summary = await apiRequest('/finance/summary');
+        document.getElementById('total-income').textContent = `₺${summary.total_income.toFixed(2)}`;
+        document.getElementById('total-expenses').textContent = `₺${summary.total_expenses.toFixed(2)}`;
+        document.getElementById('finance-balance').textContent = `₺${summary.balance.toFixed(2)}`;
+        document.getElementById('month-income').textContent = `₺${summary.month_income.toFixed(2)}`;
+    } catch (error) {
+        console.error('Finans özeti yüklenirken hata:', error);
+    }
+}
+
+async function loadFinanceTransactions(page = 1, transactionType = '') {
+    try {
+        const params = new URLSearchParams({ page, transaction_type: transactionType });
+        const data = await apiRequest(`/finance/transactions?${params}`);
+        updateFinanceTransactionsTable(data.transactions);
+        updatePagination('transactions-pagination', data.page, data.totalPages, loadFinanceTransactions);
+    } catch (error) {
+        console.error('Finans işlemleri yüklenirken hata:', error);
+    }
+}
+
+function updateFinanceTransactionsTable(transactions) {
+    const tbody = document.getElementById('transactions-table');
+    
+    if (transactions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center">İşlem bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = transactions.map(transaction => `
+        <tr>
+            <td><span class="badge badge-${transaction.transaction_type === 'income' ? 'success' : 'danger'}">${transaction.transaction_type === 'income' ? 'Gelir' : 'Gider'}</span></td>
+            <td>₺${transaction.amount.toFixed(2)}</td>
+            <td>${transaction.category || '-'}</td>
+            <td>${transaction.description || '-'}</td>
+            <td>${transaction.payment_method || '-'}</td>
+            <td><span class="badge badge-${transaction.status === 'completed' ? 'success' : 'warning'}">${transaction.status === 'completed' ? 'Tamamlandı' : 'Bekliyor'}</span></td>
+            <td>${formatDate(transaction.transaction_date)}</td>
+            <td>
+                <button class="btn btn-sm btn-icon" onclick="deleteTransaction('${transaction.id}')">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function deleteTransaction(transactionId) {
+    if (!confirm('Bu işlemi silmek istediğinize emin misiniz?')) return;
+
+    try {
+        await apiRequest(`/finance/transactions/${transactionId}`, { method: 'DELETE' });
+        loadFinanceTransactions();
+        loadFinanceSummary();
+        showToast('İşlem silindi', 'success');
+    } catch (error) {
+        showToast('İşlem silme hatası', 'error');
+    }
+}
+
+// Activity Logs
+async function loadActivityLogs(page = 1, entityType = '') {
+    try {
+        const params = new URLSearchParams({ page, entity_type: entityType });
+        const data = await apiRequest(`/activity-logs?${params}`);
+        updateActivityLogsTable(data.logs);
+        updatePagination('activity-pagination', data.page, data.totalPages, loadActivityLogs);
+    } catch (error) {
+        console.error('Aktivite logları yüklenirken hata:', error);
+    }
+}
+
+function updateActivityLogsTable(logs) {
+    const tbody = document.getElementById('activity-logs-table');
+    
+    if (logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">Aktivite bulunamadı</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = logs.map(log => `
+        <tr>
+            <td>${log.user_name || '-'}</td>
+            <td>${log.action}</td>
+            <td>${log.entity_type || '-'}</td>
+            <td>${log.entity_id || '-'}</td>
+            <td>${log.details || '-'}</td>
+            <td>${log.ip_address || '-'}</td>
+            <td>${formatDate(log.created_at)}</td>
+        </tr>
+    `).join('');
+}
+
+// PDF Reports
+function printInvoicePDF(orderId) {
+    window.open(`${API_BASE_URL}/pdf/invoice/${orderId}`, '_blank');
+}
+
+function printStockReportPDF() {
+    window.open(`${API_BASE_URL}/pdf/stock-report`, '_blank');
+}
+
+// Product Variations
+function addVariation() {
+    const variationsContainer = document.getElementById('product-variations');
+    const variationHtml = `
+        <div class="variation-item">
+            <input type="text" class="variation-phone-model" placeholder="Telefon Modeli">
+            <input type="text" class="variation-color" placeholder="Renk">
+            <input type="text" class="variation-protection-type" placeholder="Koruma Tipi">
+            <input type="number" class="variation-price" placeholder="Fiyat" step="0.01">
+            <input type="number" class="variation-stock" placeholder="Stok" min="0">
+            <button type="button" class="btn btn-icon remove-variation">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+    variationsContainer.insertAdjacentHTML('beforeend', variationHtml);
+    
+    // Add remove listener
+    const newVariation = variationsContainer.lastElementChild;
+    newVariation.querySelector('.remove-variation').addEventListener('click', function() {
+        newVariation.remove();
+    });
+}
+
+function collectVariations(productId) {
+    const variations = [];
+    document.querySelectorAll('.variation-item').forEach(item => {
+        const phoneModel = item.querySelector('.variation-phone-model').value.trim();
+        const color = item.querySelector('.variation-color').value.trim();
+        const protectionType = item.querySelector('.variation-protection-type').value.trim();
+        const price = parseFloat(item.querySelector('.variation-price').value);
+        const stock = parseInt(item.querySelector('.variation-stock').value) || 0;
+        
+        if (phoneModel || color || protectionType) {
+            variations.push({
+                phone_model: phoneModel,
+                color: color,
+                protection_type: protectionType,
+                price: price || 0,
+                stock_quantity: stock
+            });
+        }
+    });
+    return variations;
+}
+
+async function saveProductVariations(productId, variations) {
+    for (const variation of variations) {
+        try {
+            await apiRequest('/variations', {
+                method: 'POST',
+                body: JSON.stringify({
+                    product_id: productId,
+                    ...variation
+                })
+            });
+        } catch (error) {
+            console.error('Varyasyon kaydedilirken hata:', error);
+        }
+    }
+}
+
+// Shipping Label
+function initShippingLabel() {
+    document.getElementById('label-preview').classList.add('hidden');
+    document.getElementById('tracking-number').value = '';
+}
+
+function generateShippingLabel() {
+    const trackingNumber = document.getElementById('tracking-number').value.trim();
+    
+    if (!trackingNumber) {
+        showToast('Kargo takip numarası girin', 'error');
+        return;
+    }
+    
+    document.getElementById('label-tracking-number').textContent = trackingNumber;
+    document.getElementById('label-preview').classList.remove('hidden');
+}
+
+function printShippingLabel() {
+    const labelContainer = document.getElementById('label-container');
+    const printWindow = window.open('', '_blank');
+    
+    printWindow.document.write(`
+        <html>
+        <head>
+            <title>Kargo Etiketi</title>
+            <style>
+                body {
+                    margin: 0;
+                    padding: 20px;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                }
+                .label {
+                    border: 3px dashed #000;
+                    padding: 20px;
+                    text-align: center;
+                    background: white;
+                    max-width: 400px;
+                }
+                .tracking-number {
+                    font-size: 48px;
+                    font-weight: bold;
+                    letter-spacing: 4px;
+                    margin-bottom: 10px;
+                }
+                .label-text {
+                    font-size: 14px;
+                    color: #666;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="label">
+                <div class="tracking-number">${document.getElementById('label-tracking-number').textContent}</div>
+                <div class="label-text">KARGO TAKİP NUMARASI</div>
+            </div>
+        </body>
+        </html>
+    `);
+    
+    printWindow.document.close();
+    printWindow.print();
+}
+
+// Settings
+async function loadSettings() {
+    try {
+        const settings = await apiRequest('/settings');
+        
+        document.getElementById('company-name').value = settings.company_name || '';
+        document.getElementById('company-phone').value = settings.phone || '';
+        document.getElementById('company-email').value = settings.email || '';
+        document.getElementById('company-address').value = settings.address || '';
+        document.getElementById('tax-rate').value = settings.tax_rate || '';
+        document.getElementById('currency').value = settings.currency || 'TRY';
+    } catch (error) {
+        console.error('Ayarlar yüklenirken hata:', error);
+    }
+}
+
+async function saveSettings(formData) {
+    try {
+        const settingsData = {
+            company_name: formData.get('company_name'),
+            phone: formData.get('phone'),
+            email: formData.get('email'),
+            address: formData.get('address'),
+            tax_rate: formData.get('tax_rate'),
+            currency: formData.get('currency')
+        };
+
+        await apiRequest('/settings', {
+            method: 'PUT',
+            body: JSON.stringify(settingsData)
+        });
+
+        showToast('Ayarlar kaydedildi', 'success');
+    } catch (error) {
+        showToast('Ayarlar kaydedilirken hata', 'error');
+    }
+}
+
+// Profile
+async function loadProfile() {
+    try {
+        const profile = await apiRequest('/users/profile');
+        
+        document.getElementById('profile-username').value = profile.username;
+        document.getElementById('profile-fullname').value = profile.full_name || '';
+        document.getElementById('profile-email').value = profile.email || '';
+    } catch (error) {
+        showToast('Profil yüklenirken hata', 'error');
+    }
+}
+
+async function saveProfile(formData) {
+    try {
+        const profileData = {
+            email: formData.get('email'),
+            full_name: formData.get('full_name')
+        };
+
+        await apiRequest('/users/profile', {
+            method: 'PUT',
+            body: JSON.stringify(profileData)
+        });
+
+        closeModal();
+        showToast('Profil güncellendi', 'success');
+    } catch (error) {
+        showToast('Profil güncellenirken hata', 'error');
+    }
+}
+
+async function changePassword(formData) {
+    try {
+        const currentPassword = formData.get('currentPassword');
+        const newPassword = formData.get('newPassword');
+        const confirmPassword = document.getElementById('confirm-password').value;
+
+        if (newPassword !== confirmPassword) {
+            showToast('Şifreler eşleşmiyor', 'error');
+            return;
+        }
+
+        await apiRequest('/users/change-password', {
+            method: 'PUT',
+            body: JSON.stringify({
+                currentPassword,
+                newPassword
+            })
+        });
+
+        closeModal();
+        showToast('Şifre başarıyla değiştirildi', 'success');
+    } catch (error) {
+        showToast('Şifre değiştirme hatası', 'error');
+    }
+}
+
+// Helper Functions
+function getStatusBadgeClass(status) {
+    const statusMap = {
+        'pending': 'warning',
+        'processing': 'info',
+        'shipped': 'info',
+        'delivered': 'success',
+        'cancelled': 'danger'
+    };
+    return statusMap[status] || 'secondary';
+}
+
+function getStatusLabel(status) {
+    const statusMap = {
+        'pending': 'Bekliyor',
+        'processing': 'İşleniyor',
+        'shipped': 'Kargolandı',
+        'delivered': 'Teslim Edildi',
+        'cancelled': 'İptal Edildi'
+    };
+    return statusMap[status] || status;
+}
+
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('tr-TR', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function updatePagination(containerId, currentPage, totalPages, loadFunction) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    let html = '';
+
+    if (currentPage > 1) {
+        html += `<button onclick="${loadFunction.name}(${currentPage - 1})">Önceki</button>`;
+    }
+
+    for (let i = 1; i <= totalPages; i++) {
+        html += `<button class="${i === currentPage ? 'active' : ''}" onclick="${loadFunction.name}(${i})">${i}</button>`;
+    }
+
+    if (currentPage < totalPages) {
+        html += `<button onclick="${loadFunction.name}(${currentPage + 1})">Sonraki</button>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.innerHTML = `
+        <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i>
+        <span>${message}</span>
+    `;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
+
+// Modal Functions
+function openModal(modalId) {
+    document.getElementById(modalId).classList.remove('hidden');
+    modalOverlay.classList.remove('hidden');
+}
+
+function closeModal() {
+    document.querySelectorAll('.modal').forEach(modal => modal.classList.add('hidden'));
+    modalOverlay.classList.add('hidden');
+    
+    // Reset forms
+    document.querySelectorAll('form').forEach(form => form.reset());
+    document.getElementById('product-id').value = '';
+    document.getElementById('category-id').value = '';
+    document.getElementById('customer-id').value = '';
+    document.getElementById('order-id').value = '';
+}
+
+// Order Items
+function addOrderItem(productId = '', quantity = 1, price = '') {
+    const orderItemsContainer = document.getElementById('order-items');
+    const itemHtml = `
+        <div class="order-item">
+            <select class="item-product" name="product_id">
+                <option value="">Ürün Seçiniz</option>
+            </select>
+            <input type="number" class="item-quantity" name="quantity" value="${quantity}" min="1">
+            <input type="number" class="item-price" name="unit_price" step="0.01" placeholder="Fiyat" value="${price}">
+            <button type="button" class="btn btn-icon remove-item">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+    orderItemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+    
+    // Load products for the new select
+    const newSelect = orderItemsContainer.lastElementChild.querySelector('.item-product');
+    loadProductsForSelect(newSelect);
+    
+    if (productId) {
+        newSelect.value = productId;
+    }
+    
+    // Add event listeners for calculation
+    newSelect.addEventListener('change', updateOrderTotal);
+    orderItemsContainer.lastElementChild.querySelector('.item-quantity').addEventListener('input', updateOrderTotal);
+    orderItemsContainer.lastElementChild.querySelector('.item-price').addEventListener('input', updateOrderTotal);
+    
+    updateOrderTotal();
+}
+
+function updateOrderTotal() {
+    let subtotal = 0;
+    
+    document.querySelectorAll('.order-item').forEach(item => {
+        const quantity = parseInt(item.querySelector('.item-quantity').value) || 0;
+        const price = parseFloat(item.querySelector('.item-price').value) || 0;
+        subtotal += quantity * price;
+    });
+    
+    const tax = parseFloat(document.getElementById('order-tax').value) || 0;
+    const shipping = parseFloat(document.getElementById('order-shipping').value) || 0;
+    const discount = parseFloat(document.getElementById('order-discount').value) || 0;
+    
+    const total = subtotal + tax + shipping - discount;
+    
+    document.getElementById('order-subtotal').textContent = `₺${subtotal.toFixed(2)}`;
+    document.getElementById('order-total').textContent = `₺${total.toFixed(2)}`;
+}
+
+async function loadProductsForSelect(select) {
+    try {
+        const data = await apiRequest('/products?limit=100');
+        
+        select.innerHTML = '<option value="">Ürün Seçiniz</option>';
+        
+        data.products.forEach(product => {
+            const option = document.createElement('option');
+            option.value = product.id;
+            option.textContent = `${product.name} - ₺${product.price.toFixed(2)}`;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Ürünler yüklenirken hata:', error);
+    }
+}
+
+async function loadCustomersForSelect() {
+    try {
+        const customers = await apiRequest('/customers');
+        const select = document.getElementById('order-customer');
+        
+        select.innerHTML = '<option value="">Seçiniz</option>';
+        customers.forEach(customer => {
+            const option = document.createElement('option');
+            option.value = customer.id;
+            option.textContent = customer.name;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Müşteriler yüklenirken hata:', error);
+    }
+}
+
+// Event Listeners
+function initializeEventListeners() {
+    // Login
+    loginForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(loginForm);
+        login(formData.get('username'), formData.get('password'));
+    });
+
+    // Navigation
+    document.querySelectorAll('.nav-item[data-page]').forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.preventDefault();
+            const page = item.dataset.page;
+            navigateToPage(page);
+        });
+    });
+
+    // Logout
+    document.getElementById('logout-btn').addEventListener('click', (e) => {
+        e.preventDefault();
+        logout();
+    });
+
+    document.getElementById('logout-dropdown-btn').addEventListener('click', (e) => {
+        e.preventDefault();
+        logout();
+    });
+
+    // Theme Toggle
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        changeTheme(newTheme);
+    });
+
+    // User Menu
+    document.getElementById('user-menu-btn').addEventListener('click', () => {
+        document.getElementById('user-dropdown').classList.toggle('show');
+    });
+
+    // Profile
+    document.getElementById('profile-btn').addEventListener('click', (e) => {
+        e.preventDefault();
+        document.getElementById('user-dropdown').classList.remove('show');
+        loadProfile();
+        openModal('profile-modal');
+    });
+
+    // Change Password
+    document.getElementById('change-password-btn').addEventListener('click', (e) => {
+        e.preventDefault();
+        document.getElementById('user-dropdown').classList.remove('show');
+        openModal('password-modal');
+    });
+
+    // Menu Toggle (Mobile)
+    document.getElementById('menu-toggle').addEventListener('click', () => {
+        document.querySelector('.sidebar').classList.toggle('open');
+    });
+
+    // Modal Close
+    document.querySelectorAll('.close-modal').forEach(btn => {
+        btn.addEventListener('click', closeModal);
+    });
+
+    modalOverlay.addEventListener('click', (e) => {
+        if (e.target === modalOverlay) closeModal();
+    });
+
+    // Product Modal
+    document.getElementById('add-product-btn').addEventListener('click', () => {
+        document.getElementById('product-modal-title').textContent = 'Yeni Ürün';
+        document.getElementById('product-form').reset();
+        document.getElementById('product-id').value = '';
+        document.getElementById('product-variations').innerHTML = `
+            <div class="variation-item">
+                <input type="text" class="variation-phone-model" placeholder="Telefon Modeli (Örn: iPhone 14)">
+                <input type="text" class="variation-color" placeholder="Renk (Örn: Siyah)">
+                <input type="text" class="variation-protection-type" placeholder="Koruma Tipi (Örn: 9D, Cam)">
+                <input type="number" class="variation-price" placeholder="Fiyat" step="0.01">
+                <input type="number" class="variation-stock" placeholder="Stok" min="0">
+                <button type="button" class="btn btn-icon remove-variation">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        `;
+        loadCategories();
+        openModal('product-modal');
+    });
+
+    // Add variation
+    document.getElementById('add-variation-btn').addEventListener('click', addVariation);
+    
+    // Variation items remove
+    document.addEventListener('click', function(e) {
+        if (e.target.closest('.remove-variation')) {
+            e.target.closest('.variation-item').remove();
+        }
+    });
+
+    document.getElementById('product-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveProduct(formData);
+    });
+
+    // Category Modal
+    document.getElementById('add-category-btn').addEventListener('click', () => {
+        document.getElementById('category-modal-title').textContent = 'Yeni Kategori';
+        document.getElementById('category-form').reset();
+        document.getElementById('category-id').value = '';
+        loadCategories();
+        openModal('category-modal');
+    });
+
+    document.getElementById('category-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveCategory(formData);
+    });
+
+    // Customer Modal
+    document.getElementById('add-customer-btn').addEventListener('click', () => {
+        document.getElementById('customer-modal-title').textContent = 'Yeni Müşteri';
+        document.getElementById('customer-form').reset();
+        document.getElementById('customer-id').value = '';
+        openModal('customer-modal');
+    });
+
+    document.getElementById('customer-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveCustomer(formData);
+    });
+
+    // Order Modal
+    document.getElementById('add-order-btn').addEventListener('click', () => {
+        document.getElementById('order-modal-title').textContent = 'Yeni Sipariş';
+        document.getElementById('order-form').reset();
+        document.getElementById('order-id').value = '';
+        document.getElementById('order-items').innerHTML = '';
+        addOrderItem();
+        loadCustomersForSelect();
+        openModal('order-modal');
+    });
+
+    document.getElementById('order-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveOrder(formData);
+    });
+
+    document.getElementById('add-order-item').addEventListener('click', () => {
+        addOrderItem();
+    });
+
+    document.addEventListener('click', (e) => {
+        if (e.target.closest('.remove-item')) {
+            e.target.closest('.order-item').remove();
+        }
+    });
+
+    // Settings
+    document.getElementById('company-settings-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveSettings(formData);
+    });
+
+    // Theme Options
+    document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const theme = btn.dataset.theme;
+            changeTheme(theme);
+        });
+    });
+
+    // Profile Form
+    document.getElementById('profile-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveProfile(formData);
+    });
+
+    // Password Form
+    document.getElementById('password-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        changePassword(formData);
+    });
+
+    // Search
+    document.getElementById('product-search').addEventListener('input', (e) => {
+        loadProducts(1, e.target.value);
+    });
+
+    document.getElementById('customer-search').addEventListener('input', (e) => {
+        loadCustomers(e.target.value);
+    });
+
+    document.getElementById('order-search').addEventListener('input', (e) => {
+        loadOrders(1, document.getElementById('order-status-filter').value, e.target.value);
+    });
+
+    document.getElementById('order-status-filter').addEventListener('change', (e) => {
+        loadOrders(1, e.target.value, document.getElementById('order-search').value);
+    });
+
+    // Stock movements
+    document.getElementById('stock-movement-type-filter').addEventListener('change', (e) => {
+        loadStockMovements(1, e.target.value);
+    });
+
+    document.getElementById('stock-search').addEventListener('input', (e) => {
+        loadStockMovements(1, document.getElementById('stock-movement-type-filter').value);
+    });
+
+    // Suppliers
+    document.getElementById('supplier-search').addEventListener('input', (e) => {
+        loadSuppliers(e.target.value);
+    });
+
+    // Returns
+    document.getElementById('return-status-filter').addEventListener('change', (e) => {
+        loadReturns(1, e.target.value);
+    });
+
+    // Finance
+    document.getElementById('transaction-type-filter').addEventListener('change', (e) => {
+        loadFinanceTransactions(1, e.target.value);
+    });
+
+    // Activity
+    document.getElementById('activity-entity-filter').addEventListener('change', (e) => {
+        loadActivityLogs(1, e.target.value);
+    });
+
+    // Shipping Label
+    document.getElementById('generate-label-btn').addEventListener('click', generateShippingLabel);
+    document.getElementById('print-label-btn').addEventListener('click', printShippingLabel);
+    document.getElementById('close-label-btn').addEventListener('click', () => {
+        document.getElementById('label-preview').classList.add('hidden');
+        document.getElementById('tracking-number').value = '';
+    });
+
+    // PDF Reports
+    document.getElementById('generate-stock-pdf-btn').addEventListener('click', printStockReportPDF);
+    document.getElementById('print-invoice-btn').addEventListener('click', function() {
+        const orderId = this.dataset.orderId;
+        if (orderId) {
+            printInvoicePDF(orderId);
+        }
+    });
+
+    // Export
+    document.getElementById('export-orders-csv-btn').addEventListener('click', () => {
+        const startDate = document.getElementById('report-start-date').value;
+        const endDate = document.getElementById('report-end-date').value;
+        
+        let url = `${API_BASE_URL}/export/orders?format=csv`;
+        const params = new URLSearchParams();
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        if (params.toString()) url += `&${params}`;
+        
+        window.open(url, '_blank');
+    });
+
+    document.getElementById('export-orders-excel-btn').addEventListener('click', () => {
+        const startDate = document.getElementById('report-start-date').value;
+        const endDate = document.getElementById('report-end-date').value;
+        
+        let url = `${API_BASE_URL}/export/orders?format=excel`;
+        const params = new URLSearchParams();
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        if (params.toString()) url += `&${params}`;
+        
+        window.open(url, '_blank');
+    });
+
+    // Generate Report
+    document.getElementById('generate-report-btn').addEventListener('click', () => {
+        showToast('Rapor oluşturuluyor...', 'info');
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.user-dropdown')) {
+            document.getElementById('user-dropdown').classList.remove('show');
+        }
+    });
+}
+
+// Navigation
+function navigateToPage(page) {
+    // Update nav items
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.remove('active');
+        if (item.dataset.page === page) {
+            item.classList.add('active');
+        }
+    });
+
+    // Update pages
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(`${page}-page`).classList.add('active');
+
+    // Update title
+    const titles = {
+        'dashboard': 'Dashboard',
+        'products': 'Ürünler',
+        'categories': 'Kategoriler',
+        'stock': 'Stok',
+        'suppliers': 'Tedarikçiler',
+        'orders': 'Siparişler',
+        'shipping-label': 'Kargo Etiketi',
+        'customers': 'Müşteriler',
+        'returns': 'İadeler',
+        'coupons': 'Kuponlar',
+        'finance': 'Finans',
+        'reports': 'Raporlar',
+        'activity': 'Aktivite',
+        'settings': 'Ayarlar'
+    };
+    document.getElementById('page-title').textContent = titles[page] || page;
+
+    // Load page data
+    switch (page) {
+        case 'dashboard':
+            loadDashboard();
+            break;
+        case 'products':
+            loadProducts();
+            break;
+        case 'categories':
+            loadCategories();
+            break;
+        case 'stock':
+            loadStockMovements();
+            break;
+        case 'suppliers':
+            loadSuppliers();
+            break;
+        case 'orders':
+            loadOrders();
+            break;
+        case 'shipping-label':
+            initShippingLabel();
+            break;
+        case 'customers':
+            loadCustomers();
+            break;
+        case 'returns':
+            loadReturns();
+            break;
+        case 'coupons':
+            loadCoupons();
+            break;
+        case 'finance':
+            loadFinanceSummary();
+            loadFinanceTransactions();
+            break;
+        case 'activity':
+            loadActivityLogs();
+            break;
+        case 'settings':
+            loadSettings();
+            break;
+    }
+
+    // Close mobile menu
+    document.querySelector('.sidebar').classList.remove('open');
+}

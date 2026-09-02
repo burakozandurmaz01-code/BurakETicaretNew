@@ -1,0 +1,1200 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Burak E-Ticaret Yönetim Sistemi</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Login Screen -->
+        <div id="login-screen" class="screen">
+            <div class="login-container">
+                <div class="login-header">
+                    <i class="fas fa-store"></i>
+                    <h1>Burak E-Ticaret</h1>
+                    <p>Yönetim Sistemi</p>
+                </div>
+                <form id="login-form">
+                    <div class="form-group">
+                        <label for="username">Kullanıcı Adı</label>
+                        <input type="text" id="username" name="username" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Şifre</label>
+                        <input type="password" id="password" name="password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Giriş Yap</button>
+                </form>
+                <div class="login-footer">
+                    <p>Varsayılan: admin / admin123</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Application -->
+        <div id="main-app" class="screen hidden">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <i class="fas fa-store"></i>
+                    <span>Burak E-Ticaret</span>
+                </div>
+                <nav class="sidebar-nav">
+                    <a href="#" class="nav-item active" data-page="dashboard">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Dashboard</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="products">
+                        <i class="fas fa-box"></i>
+                        <span>Ürünler</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="categories">
+                        <i class="fas fa-tags"></i>
+                        <span>Kategoriler</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="stock">
+                        <i class="fas fa-warehouse"></i>
+                        <span>Stok</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="suppliers">
+                        <i class="fas fa-truck"></i>
+                        <span>Tedarikçiler</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="orders">
+                        <i class="fas fa-shopping-cart"></i>
+                        <span>Siparişler</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="shipping-label">
+                        <i class="fas fa-shipping-fast"></i>
+                        <span>Kargo Etiketi</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="customers">
+                        <i class="fas fa-users"></i>
+                        <span>Müşteriler</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="returns">
+                        <i class="fas fa-undo"></i>
+                        <span>İadeler</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="coupons">
+                        <i class="fas fa-ticket-alt"></i>
+                        <span>Kuponlar</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="finance">
+                        <i class="fas fa-coins"></i>
+                        <span>Finans</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="reports">
+                        <i class="fas fa-file-alt"></i>
+                        <span>Raporlar</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="activity">
+                        <i class="fas fa-history"></i>
+                        <span>Aktivite</span>
+                    </a>
+                    <a href="#" class="nav-item" data-page="settings">
+                        <i class="fas fa-cog"></i>
+                        <span>Ayarlar</span>
+                    </a>
+                </nav>
+                <div class="sidebar-footer">
+                    <a href="#" class="nav-item" id="logout-btn">
+                        <i class="fas fa-sign-out-alt"></i>
+                        <span>Çıkış Yap</span>
+                    </a>
+                </div>
+            </aside>
+
+            <!-- Main Content -->
+            <main class="main-content">
+                <!-- Header -->
+                <header class="header">
+                    <div class="header-left">
+                        <button class="btn btn-icon" id="menu-toggle">
+                            <i class="fas fa-bars"></i>
+                        </button>
+                        <h2 id="page-title">Dashboard</h2>
+                    </div>
+                    <div class="header-right">
+                        <button class="btn btn-icon" id="theme-toggle">
+                            <i class="fas fa-moon"></i>
+                        </button>
+                        <div class="user-dropdown">
+                            <button class="btn btn-icon" id="user-menu-btn">
+                                <i class="fas fa-user-circle"></i>
+                            </button>
+                            <div class="dropdown-menu" id="user-dropdown">
+                                <a href="#" class="dropdown-item" id="profile-btn">
+                                    <i class="fas fa-user"></i>
+                                    <span>Profil</span>
+                                </a>
+                                <a href="#" class="dropdown-item" id="change-password-btn">
+                                    <i class="fas fa-key"></i>
+                                    <span>Şifre Değiştir</span>
+                                </a>
+                                <div class="dropdown-divider"></div>
+                                <a href="#" class="dropdown-item" id="logout-dropdown-btn">
+                                    <i class="fas fa-sign-out-alt"></i>
+                                    <span>Çıkış Yap</span>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+
+                <!-- Page Content -->
+                <div class="page-content">
+                    <!-- Dashboard Page -->
+                    <div id="dashboard-page" class="page active">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-icon">
+                                    <i class="fas fa-box"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Toplam Ürün</h3>
+                                    <p class="stat-value" id="total-products">0</p>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">
+                                    <i class="fas fa-users"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Toplam Müşteri</h3>
+                                    <p class="stat-value" id="total-customers">0</p>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">
+                                    <i class="fas fa-shopping-cart"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Toplam Sipariş</h3>
+                                    <p class="stat-value" id="total-orders">0</p>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">
+                                    <i class="fas fa-lira-sign"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Toplam Gelir</h3>
+                                    <p class="stat-value" id="total-revenue">₺0</p>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">
+                                    <i class="fas fa-clock"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Bekleyen Sipariş</h3>
+                                    <p class="stat-value" id="pending-orders">0</p>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">
+                                    <i class="fas fa-exclamation-triangle"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Düşük Stok</h3>
+                                    <p class="stat-value" id="low-stock">0</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dashboard-grid">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>Son Siparişler</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div class="table-responsive">
+                                        <table class="table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Sipariş No</th>
+                                                    <th>Müşteri</th>
+                                                    <th>Tutar</th>
+                                                    <th>Durum</th>
+                                                    <th>Tarih</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="recent-orders-table">
+                                                <tr>
+                                                    <td colspan="5" class="text-center">Yükleniyor...</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>Satış Grafiği</h3>
+                                </div>
+                                <div class="card-body">
+                                    <canvas id="sales-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Products Page -->
+                    <div id="products-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-product-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Yeni Ürün
+                                </button>
+                                <div class="search-box">
+                                    <input type="text" id="product-search" placeholder="Ürün ara...">
+                                    <i class="fas fa-search"></i>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Resim</th>
+                                                <th>Ürün Adı</th>
+                                                <th>Kategori</th>
+                                                <th>Fiyat</th>
+                                                <th>Stok</th>
+                                                <th>Durum</th>
+                                                <th>İşlemler</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="products-table">
+                                            <tr>
+                                                <td colspan="7" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="pagination" id="products-pagination"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Categories Page -->
+                    <div id="categories-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-category-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Yeni Kategori
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Kategori Adı</th>
+                                                <th>Açıklama</th>
+                                                <th>Ürün Sayısı</th>
+                                                <th>İşlemler</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="categories-table">
+                                            <tr>
+                                                <td colspan="4" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Shipping Label Page -->
+                    <div id="shipping-label-page" class="page">
+                        <div class="dashboard-grid">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>Kargo Etiketi Oluştur</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div class="form-group">
+                                        <label for="tracking-number">Kargo Takip Numarası</label>
+                                        <input type="text" id="tracking-number" placeholder="Örn: 1234567890" style="font-size: 18px; padding: 12px; letter-spacing: 2px;">
+                                    </div>
+                                    <button class="btn btn-primary" id="generate-label-btn" style="width: 100%; padding: 15px; font-size: 16px;">
+                                        <i class="fas fa-print"></i>
+                                        Etiket Oluştur ve Yazdır
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="label-preview" class="hidden" style="margin-top: 30px;">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>Etiket Önizleme</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div id="label-container" style="border: 3px dashed #000; padding: 20px; text-align: center; background: white; max-width: 400px; margin: 0 auto;">
+                                        <div style="font-size: 48px; font-weight: bold; letter-spacing: 4px; margin-bottom: 10px;" id="label-tracking-number"></div>
+                                        <div style="font-size: 14px; color: #666;">KARGO TAKİP NUMARASI</div>
+                                    </div>
+                                    <div style="text-align: center; margin-top: 20px;">
+                                        <button class="btn btn-primary" id="print-label-btn">
+                                            <i class="fas fa-print"></i>
+                                            Yazdır
+                                        </button>
+                                        <button class="btn btn-secondary" id="close-label-btn">
+                                            <i class="fas fa-times"></i>
+                                            Kapat
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Orders Page -->
+                    <div id="orders-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-order-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Yeni Sipariş
+                                </button>
+                                <div class="filter-group">
+                                    <select id="order-status-filter">
+                                        <option value="">Tüm Durumlar</option>
+                                        <option value="pending">Bekliyor</option>
+                                        <option value="processing">İşleniyor</option>
+                                        <option value="shipped">Kargolandı</option>
+                                        <option value="delivered">Teslim Edildi</option>
+                                        <option value="cancelled">İptal Edildi</option>
+                                    </select>
+                                </div>
+                                <div class="search-box">
+                                    <input type="text" id="order-search" placeholder="Sipariş ara...">
+                                    <i class="fas fa-search"></i>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Sipariş No</th>
+                                                <th>Müşteri</th>
+                                                <th>Tutar</th>
+                                                <th>Durum</th>
+                                                <th>Tarih</th>
+                                                <th>İşlemler</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="orders-table">
+                                            <tr>
+                                                <td colspan="6" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="pagination" id="orders-pagination"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Customers Page -->
+                    <div id="customers-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-customer-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Yeni Müşteri
+                                </button>
+                                <div class="search-box">
+                                    <input type="text" id="customer-search" placeholder="Müşteri ara...">
+                                    <i class="fas fa-search"></i>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Ad Soyad</th>
+                                                <th>E-posta</th>
+                                                <th>Telefon</th>
+                                                <th>Şehir</th>
+                                                <th>Vergi No</th>
+                                                <th>İşlemler</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="customers-table">
+                                            <tr>
+                                                <td colspan="6" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Reports Page -->
+                    <div id="reports-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="export-orders-csv-btn">
+                                    <i class="fas fa-file-csv"></i>
+                                    CSV Dışa Aktar
+                                </button>
+                                <button class="btn btn-success" id="export-orders-excel-btn">
+                                    <i class="fas fa-file-excel"></i>
+                                    Excel Dışa Aktar
+                                </button>
+                                <button class="btn btn-danger" id="generate-stock-pdf-btn">
+                                    <i class="fas fa-file-pdf"></i>
+                                    Stok Raporu (PDF)
+                                </button>
+                            </div>
+                        </div>
+                        <div class="dashboard-grid">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>Satış Raporu</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div class="date-filter">
+                                        <input type="date" id="report-start-date">
+                                        <input type="date" id="report-end-date">
+                                        <button class="btn btn-primary" id="generate-report-btn">Rapor Oluştur</button>
+                                    </div>
+                                    <div id="report-results"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Stock Page -->
+                    <div id="stock-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-stock-movement-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Stok Hareketi Ekle
+                                </button>
+                                <div class="filter-group">
+                                    <select id="stock-movement-type-filter">
+                                        <option value="">Tüm Türler</option>
+                                        <option value="in">Giriş</option>
+                                        <option value="out">Çıkış</option>
+                                        <option value="adjustment">Düzeltme</option>
+                                    </select>
+                                </div>
+                                <div class="search-box">
+                                    <input type="text" id="stock-search" placeholder="Ürün ara...">
+                                    <i class="fas fa-search"></i>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Ürün</th>
+                                                <th>Tür</th>
+                                                <th>Miktar</th>
+                                                <th>Referans</th>
+                                                <th>Notlar</th>
+                                                <th>Tarih</th>
+                                                <th>İşlemi Yapan</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="stock-movements-table">
+                                            <tr>
+                                                <td colspan="7" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="pagination" id="stock-pagination"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Suppliers Page -->
+                    <div id="suppliers-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-supplier-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Yeni Tedarikçi
+                                </button>
+                                <div class="search-box">
+                                    <input type="text" id="supplier-search" placeholder="Tedarikçi ara...">
+                                    <i class="fas fa-search"></i>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Firma Adı</th>
+                                                <th>İletişim Kişisi</th>
+                                                <th>E-posta</th>
+                                                <th>Telefon</th>
+                                                <th>Şehir</th>
+                                                <th>Vergi No</th>
+                                                <th>Ödeme Şartları</th>
+                                                <th>İşlemler</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="suppliers-table">
+                                            <tr>
+                                                <td colspan="8" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Returns Page -->
+                    <div id="returns-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-return-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Yeni İade
+                                </button>
+                                <div class="filter-group">
+                                    <select id="return-status-filter">
+                                        <option value="">Tüm Durumlar</option>
+                                        <option value="pending">Bekliyor</option>
+                                        <option value="approved">Onaylandı</option>
+                                        <option value="rejected">Reddedildi</option>
+                                        <option value="completed">Tamamlandı</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Sipariş No</th>
+                                                <th>Müşteri</th>
+                                                <th>İade Türü</th>
+                                                <th>İade Tutarı</th>
+                                                <th>Durum</th>
+                                                <th>Sebep</th>
+                                                <th>Tarih</th>
+                                                <th>İşlemler</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="returns-table">
+                                            <tr>
+                                                <td colspan="8" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="pagination" id="returns-pagination"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Coupons Page -->
+                    <div id="coupons-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-coupon-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Yeni Kupon
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Kod</th>
+                                                <th>İndirim Türü</th>
+                                                <th>İndirim Değeri</th>
+                                                <th>Min. Tutar</th>
+                                                <th>Max. İndirim</th>
+                                                <th>Kullanım Limiti</th>
+                                                <th>Kullanılan</th>
+                                                <th>Geçerlilik</th>
+                                                <th>Durum</th>
+                                                <th>İşlemler</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="coupons-table">
+                                            <tr>
+                                                <td colspan="10" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Finance Page -->
+                    <div id="finance-page" class="page">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-icon" style="background-color: rgba(16, 185, 129, 0.1); color: var(--success-color);">
+                                    <i class="fas fa-arrow-down"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Toplam Gelir</h3>
+                                    <p class="stat-value" id="total-income">₺0</p>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon" style="background-color: rgba(239, 68, 68, 0.1); color: var(--danger-color);">
+                                    <i class="fas fa-arrow-up"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Toplam Gider</h3>
+                                    <p class="stat-value" id="total-expenses">₺0</p>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon" style="background-color: rgba(37, 99, 235, 0.1); color: var(--primary-color);">
+                                    <i class="fas fa-balance-scale"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Bakiye</h3>
+                                    <p class="stat-value" id="finance-balance">₺0</p>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon" style="background-color: rgba(16, 185, 129, 0.1); color: var(--success-color);">
+                                    <i class="fas fa-calendar"></i>
+                                </div>
+                                <div class="stat-content">
+                                    <h3>Bu Ay Gelir</h3>
+                                    <p class="stat-value" id="month-income">₺0</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <button class="btn btn-primary" id="add-transaction-btn">
+                                    <i class="fas fa-plus"></i>
+                                    Yeni İşlem
+                                </button>
+                                <div class="filter-group">
+                                    <select id="transaction-type-filter">
+                                        <option value="">Tüm Türler</option>
+                                        <option value="income">Gelir</option>
+                                        <option value="expense">Gider</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Tür</th>
+                                                <th>Tutar</th>
+                                                <th>Kategori</th>
+                                                <th>Açıklama</th>
+                                                <th>Ödeme Yöntemi</th>
+                                                <th>Durum</th>
+                                                <th>Tarih</th>
+                                                <th>İşlemler</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="transactions-table">
+                                            <tr>
+                                                <td colspan="8" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="pagination" id="transactions-pagination"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Activity Page -->
+                    <div id="activity-page" class="page">
+                        <div class="page-header">
+                            <div class="page-actions">
+                                <div class="filter-group">
+                                    <select id="activity-entity-filter">
+                                        <option value="">Tüm Varlıklar</option>
+                                        <option value="product">Ürün</option>
+                                        <option value="order">Sipariş</option>
+                                        <option value="customer">Müşteri</option>
+                                        <option value="supplier">Tedarikçi</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table">
+                                        <thead>
+                                            <tr>
+                                                <th>Kullanıcı</th>
+                                                <th>İşlem</th>
+                                                <th>Varlık Türü</th>
+                                                <th>Varlık ID</th>
+                                                <th>Detaylar</th>
+                                                <th>IP Adresi</th>
+                                                <th>Tarih</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="activity-logs-table">
+                                            <tr>
+                                                <td colspan="7" class="text-center">Yükleniyor...</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="pagination" id="activity-pagination"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Settings Page -->
+                    <div id="settings-page" class="page">
+                        <div class="dashboard-grid">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>Şirket Ayarları</h3>
+                                </div>
+                                <div class="card-body">
+                                    <form id="company-settings-form">
+                                        <div class="form-group">
+                                            <label for="company-name">Şirket Adı</label>
+                                            <input type="text" id="company-name" name="company_name">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="company-phone">Telefon</label>
+                                            <input type="text" id="company-phone" name="phone">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="company-email">E-posta</label>
+                                            <input type="email" id="company-email" name="email">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="company-address">Adres</label>
+                                            <textarea id="company-address" name="address" rows="3"></textarea>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="tax-rate">Vergi Oranı (%)</label>
+                                            <input type="number" id="tax-rate" name="tax_rate" step="0.1">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="currency">Para Birimi</label>
+                                            <select id="currency" name="currency">
+                                                <option value="TRY">TRY - Türk Lirası</option>
+                                                <option value="USD">USD - US Dollar</option>
+                                                <option value="EUR">EUR - Euro</option>
+                                            </select>
+                                        </div>
+                                        <button type="submit" class="btn btn-primary">Kaydet</button>
+                                    </form>
+                                </div>
+                            </div>
+
+                            <div class="card">
+                                <div class="card-header">
+                                    <h3>Tema Ayarları</h3>
+                                </div>
+                                <div class="card-body">
+                                    <div class="theme-options">
+                                        <button class="theme-btn" data-theme="light">
+                                            <i class="fas fa-sun"></i>
+                                            <span>Aydınlık</span>
+                                        </button>
+                                        <button class="theme-btn" data-theme="dark">
+                                            <i class="fas fa-moon"></i>
+                                            <span>Karanlık</span>
+                                        </button>
+                                        <button class="theme-btn" data-theme="auto">
+                                            <i class="fas fa-adjust"></i>
+                                            <span>Otomatik</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- Modals -->
+        <div id="modal-overlay" class="modal-overlay hidden">
+            <!-- Product Modal -->
+            <div id="product-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3 id="product-modal-title">Yeni Ürün</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="product-form">
+                        <input type="hidden" id="product-id">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="product-name">Ürün Adı *</label>
+                                <input type="text" id="product-name" name="name" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="product-sku">SKU</label>
+                                <input type="text" id="product-sku" name="sku">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="product-category">Kategori</label>
+                                <select id="product-category" name="category_id">
+                                    <option value="">Seçiniz</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="product-barcode">Barkod</label>
+                                <input type="text" id="product-barcode" name="barcode">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="product-price">Satış Fiyatı *</label>
+                                <input type="number" id="product-price" name="price" step="0.01" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="product-cost">Maliyet Fiyatı</label>
+                                <input type="number" id="product-cost" name="cost_price" step="0.01">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="product-stock">Stok Miktarı</label>
+                                <input type="number" id="product-stock" name="stock_quantity" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="product-active">Durum</label>
+                                <select id="product-active" name="is_active">
+                                    <option value="true">Aktif</option>
+                                    <option value="false">Pasif</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Ürün Varyasyonları (Telefon Modeli, Renk, Koruma Camı Tipi)</label>
+                            <div id="product-variations">
+                                <div class="variation-item">
+                                    <input type="text" class="variation-phone-model" placeholder="Telefon Modeli (Örn: iPhone 14)">
+                                    <input type="text" class="variation-color" placeholder="Renk (Örn: Siyah)">
+                                    <input type="text" class="variation-protection-type" placeholder="Koruma Tipi (Örn: 9D, Cam)">
+                                    <input type="number" class="variation-price" placeholder="Fiyat" step="0.01">
+                                    <input type="number" class="variation-stock" placeholder="Stok" min="0">
+                                    <button type="button" class="btn btn-icon remove-variation">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-secondary" id="add-variation-btn">
+                                <i class="fas fa-plus"></i> Varyasyon Ekle
+                            </button>
+                        </div>
+                        <div class="form-group">
+                            <label for="product-image">Ürün Resmi</label>
+                            <input type="file" id="product-image" name="image" accept="image/*">
+                            <div id="product-image-preview" class="image-preview"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="product-active" name="is_active" checked>
+                                Aktif
+                            </label>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Kaydet</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Category Modal -->
+            <div id="category-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3 id="category-modal-title">Yeni Kategori</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="category-form">
+                        <input type="hidden" id="category-id">
+                        <div class="form-group">
+                            <label for="category-name">Kategori Adı *</label>
+                            <input type="text" id="category-name" name="name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="category-description">Açıklama</label>
+                            <textarea id="category-description" name="description" rows="3"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="category-parent">Ana Kategori</label>
+                            <select id="category-parent" name="parent_id">
+                                <option value="">Yok</option>
+                            </select>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Kaydet</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Customer Modal -->
+            <div id="customer-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3 id="customer-modal-title">Yeni Müşteri</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="customer-form">
+                        <input type="hidden" id="customer-id">
+                        <div class="form-group">
+                            <label for="customer-name">Ad Soyad *</label>
+                            <input type="text" id="customer-name" name="name" required>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="customer-email">E-posta</label>
+                                <input type="email" id="customer-email" name="email">
+                            </div>
+                            <div class="form-group">
+                                <label for="customer-phone">Telefon</label>
+                                <input type="tel" id="customer-phone" name="phone">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="customer-address">Adres</label>
+                            <textarea id="customer-address" name="address" rows="2"></textarea>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="customer-city">Şehir</label>
+                                <input type="text" id="customer-city" name="city">
+                            </div>
+                            <div class="form-group">
+                                <label for="customer-tax-no">Vergi No</label>
+                                <input type="text" id="customer-tax-no" name="tax_number">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="customer-tax-office">Vergi Dairesi</label>
+                            <input type="text" id="customer-tax-office" name="tax_office">
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Kaydet</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Order Modal -->
+            <div id="order-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3 id="order-modal-title">Yeni Sipariş</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="order-form">
+                        <input type="hidden" id="order-id">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="order-customer">Müşteri *</label>
+                                <select id="order-customer" name="customer_id" required>
+                                    <option value="">Seçiniz</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Sipariş Ürünleri</label>
+                            <div id="order-items">
+                                <div class="order-item">
+                                    <select class="item-product" name="product_id">
+                                        <option value="">Ürün Seçiniz</option>
+                                    </select>
+                                    <input type="number" class="item-quantity" name="quantity" value="1" min="1">
+                                    <input type="number" class="item-price" name="unit_price" step="0.01" placeholder="Fiyat">
+                                    <button type="button" class="btn btn-icon remove-item">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-secondary" id="add-order-item">
+                                <i class="fas fa-plus"></i> Ürün Ekle
+                            </button>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="order-tax">Vergi</label>
+                                <input type="number" id="order-tax" name="tax" step="0.01" value="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="order-shipping">Kargo</label>
+                                <input type="number" id="order-shipping" name="shipping_cost" step="0.01" value="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="order-discount">İndirim</label>
+                                <input type="number" id="order-discount" name="discount" step="0.01" value="0">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="order-notes">Notlar</label>
+                            <textarea id="order-notes" name="notes" rows="2"></textarea>
+                        </div>
+                        <div class="order-summary">
+                            <div class="summary-row">
+                                <span>Ara Toplam:</span>
+                                <span id="order-subtotal">₺0.00</span>
+                            </div>
+                            <div class="summary-row">
+                                <span>Toplam:</span>
+                                <span id="order-total">₺0.00</span>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Kaydet</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Profile Modal -->
+            <div id="profile-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3>Profil Düzenle</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="profile-form">
+                        <div class="form-group">
+                            <label for="profile-username">Kullanıcı Adı</label>
+                            <input type="text" id="profile-username" disabled>
+                        </div>
+                        <div class="form-group">
+                            <label for="profile-fullname">Ad Soyad</label>
+                            <input type="text" id="profile-fullname" name="full_name">
+                        </div>
+                        <div class="form-group">
+                            <label for="profile-email">E-posta</label>
+                            <input type="email" id="profile-email" name="email">
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Kaydet</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Change Password Modal -->
+            <div id="password-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3>Şifre Değiştir</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="password-form">
+                        <div class="form-group">
+                            <label for="current-password">Mevcut Şifre *</label>
+                            <input type="password" id="current-password" name="currentPassword" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-password">Yeni Şifre *</label>
+                            <input type="password" id="new-password" name="newPassword" required minlength="6">
+                        </div>
+                        <div class="form-group">
+                            <label for="confirm-password">Yeni Şifre (Tekrar) *</label>
+                            <input type="password" id="confirm-password" required minlength="6">
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Değiştir</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Order Detail Modal -->
+            <div id="order-detail-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3>Sipariş Detayı</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div id="order-detail-content"></div>
+                    <div style="text-align: center; margin-top: 20px;">
+                        <button class="btn btn-danger" id="print-invoice-btn">
+                            <i class="fas fa-file-pdf"></i>
+                            Fatura Yazdır (PDF)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div id="toast-container"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
