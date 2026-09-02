@@ -1757,6 +1757,10 @@ function initializeEventListeners() {
         document.querySelector('.sidebar').classList.toggle('open');
     });
 
+    document.querySelector('.sidebar-overlay').addEventListener('click', () => {
+        document.querySelector('.sidebar').classList.remove('open');
+    });
+
     // Modal Close
     document.querySelectorAll('.close-modal').forEach(btn => {
         btn.addEventListener('click', closeModal);
