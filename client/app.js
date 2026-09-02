@@ -15,6 +15,8 @@ let salesChart = null;
 
 // DOM Elements
 const loginScreen = document.getElementById('login-screen');
+const applyScreen = document.getElementById('apply-screen');
+const onboardingScreen = document.getElementById('onboarding-screen');
 const mainApp = document.getElementById('main-app');
 const loginForm = document.getElementById('login-form');
 const modalOverlay = document.getElementById('modal-overlay');
@@ -48,10 +50,16 @@ async function loadNetworkInfo() {
 function checkAuth() {
     authToken = localStorage.getItem('authToken');
     currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
-    
+
     if (authToken && currentUser) {
-        showMainApp();
-        loadDashboard();
+        if (currentUser.force_password_change) {
+            showOnboardingScreen('password');
+        } else if (!currentUser.business_info_completed) {
+            showOnboardingScreen('business');
+        } else {
+            showMainApp();
+            loadDashboard();
+        }
     } else {
         showLoginScreen();
     }
@@ -59,13 +67,35 @@ function checkAuth() {
 
 function showLoginScreen() {
     loginScreen.classList.remove('hidden');
+    applyScreen.classList.add('hidden');
+    onboardingScreen.classList.add('hidden');
     mainApp.classList.add('hidden');
+}
+
+function showApplyScreen() {
+    loginScreen.classList.add('hidden');
+    applyScreen.classList.remove('hidden');
+    onboardingScreen.classList.add('hidden');
+    mainApp.classList.add('hidden');
+}
+
+function showOnboardingScreen(step) {
+    loginScreen.classList.add('hidden');
+    applyScreen.classList.add('hidden');
+    onboardingScreen.classList.remove('hidden');
+    mainApp.classList.add('hidden');
+    document.getElementById('onboarding-step-1').style.display = step === 'password' ? 'block' : 'none';
+    document.getElementById('onboarding-step-2').style.display = step === 'business' ? 'block' : 'none';
+    if (step === 'business') loadBusinessProfileForOnboarding();
 }
 
 function showMainApp() {
     loginScreen.classList.add('hidden');
+    applyScreen.classList.add('hidden');
+    onboardingScreen.classList.add('hidden');
     mainApp.classList.remove('hidden');
     applyTheme(currentUser.theme || 'light');
+    updateSidebarForRole();
 }
 
 async function login(username, password) {
@@ -83,9 +113,17 @@ async function login(username, password) {
             currentUser = data.user;
             localStorage.setItem('authToken', authToken);
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
-            showMainApp();
-            loadDashboard();
-            showToast('Giriş başarılı', 'success');
+            if (currentUser.force_password_change) {
+                showOnboardingScreen('password');
+                showToast('Geçici şifre ile giriş yaptınız. Lütfen yeni şifre belirleyin.', 'info');
+            } else if (!currentUser.business_info_completed) {
+                showOnboardingScreen('business');
+                showToast('Lütfen işletme bilgilerinizi tamamlayın.', 'info');
+            } else {
+                showMainApp();
+                loadDashboard();
+                showToast('Giriş başarılı', 'success');
+            }
         } else {
             showToast(data.error || 'Giriş başarısız', 'error');
         }
@@ -1750,6 +1788,41 @@ function initializeEventListeners() {
         logout();
     });
 
+    // Apply / Onboarding / Account
+    document.getElementById('go-to-apply').addEventListener('click', (e) => {
+        e.preventDefault();
+        showApplyScreen();
+    });
+    document.getElementById('back-to-login').addEventListener('click', (e) => {
+        e.preventDefault();
+        showLoginScreen();
+    });
+    document.getElementById('apply-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        submitApplication();
+    });
+    document.getElementById('onboarding-password-btn').addEventListener('click', () => {
+        changeOnboardingPassword();
+    });
+    document.getElementById('onboarding-business-btn').addEventListener('click', () => {
+        saveOnboardingBusiness();
+    });
+    document.getElementById('save-account-btn').addEventListener('click', () => {
+        saveAccountBusiness();
+    });
+    document.getElementById('account-change-password-btn').addEventListener('click', () => {
+        changeAccountPassword();
+    });
+    document.getElementById('load-applications-btn').addEventListener('click', () => {
+        loadApplications();
+    });
+    document.getElementById('applications-filter-status').addEventListener('change', () => {
+        loadApplications();
+    });
+    document.getElementById('applications-search').addEventListener('input', () => {
+        loadApplications();
+    });
+
     // Theme Toggle
     document.getElementById('theme-toggle').addEventListener('click', () => {
         const newTheme = currentTheme === 'light' ? 'dark' : 'light';
@@ -2078,6 +2151,9 @@ function navigateToPage(page) {
         'finance': 'Finans',
         'reports': 'Raporlar',
         'activity': 'Aktivite',
+        'applications': 'Kullanıcı Başvuruları',
+        'users': 'Kullanıcı Yönetimi',
+        'account': 'Hesap Ayarları',
         'settings': 'Ayarlar'
     };
     document.getElementById('page-title').textContent = titles[page] || page;
@@ -2124,8 +2200,309 @@ function navigateToPage(page) {
         case 'settings':
             loadSettings();
             break;
+        case 'applications':
+            loadApplications();
+            break;
+        case 'users':
+            loadUsers();
+            break;
+        case 'account':
+            loadAccountPage();
+            break;
     }
 
     // Close mobile menu
     document.querySelector('.sidebar').classList.remove('open');
+}
+
+// --- Registration, onboarding and admin ---
+
+function updateSidebarForRole() {
+    if (!currentUser) return;
+    if (currentUser.role === 'admin') {
+        document.getElementById('nav-applications').style.display = 'flex';
+        document.getElementById('nav-users').style.display = 'flex';
+        document.getElementById('nav-account').style.display = 'none';
+    } else {
+        document.getElementById('nav-applications').style.display = 'none';
+        document.getElementById('nav-users').style.display = 'none';
+        document.getElementById('nav-account').style.display = 'flex';
+    }
+}
+
+function loadBusinessProfile(prefix) {
+    apiRequest('/business-profile').then(data => {
+        if (!data || !data.id) return;
+        document.getElementById(prefix + '-business-name').value = data.business_name || '';
+        document.getElementById(prefix + '-authorized-name').value = data.authorized_name || '';
+        document.getElementById(prefix + '-phone').value = data.phone || '';
+        document.getElementById(prefix + '-email').value = data.email || '';
+        document.getElementById(prefix + '-address').value = data.address || '';
+        document.getElementById(prefix + '-city').value = data.city || '';
+        document.getElementById(prefix + '-district').value = data.district || '';
+        document.getElementById(prefix + '-tax-number').value = data.tax_number || '';
+        document.getElementById(prefix + '-tax-office').value = data.tax_office || '';
+        document.getElementById(prefix + '-logo-url').value = data.logo_url || '';
+    }).catch(() => {});
+}
+
+function getBusinessProfileData(prefix) {
+    return {
+        business_name: document.getElementById(prefix + '-business-name').value.trim(),
+        authorized_name: document.getElementById(prefix + '-authorized-name').value.trim(),
+        phone: document.getElementById(prefix + '-phone').value.trim(),
+        email: document.getElementById(prefix + '-email').value.trim(),
+        address: document.getElementById(prefix + '-address').value.trim(),
+        city: document.getElementById(prefix + '-city').value.trim(),
+        district: document.getElementById(prefix + '-district').value.trim(),
+        tax_number: document.getElementById(prefix + '-tax-number').value.trim(),
+        tax_office: document.getElementById(prefix + '-tax-office').value.trim(),
+        logo_url: document.getElementById(prefix + '-logo-url').value.trim()
+    };
+}
+
+async function saveBusinessProfile(prefix, onSuccess) {
+    try {
+        const data = getBusinessProfileData(prefix);
+        await apiRequest('/business-profile', {
+            method: 'PUT',
+            body: JSON.stringify(data)
+        });
+        if (currentUser) {
+            currentUser.business_info_completed = true;
+            currentUser.full_name = data.authorized_name;
+            currentUser.email = data.email;
+            currentUser.phone = data.phone;
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        }
+        showToast('İşletme bilgileri kaydedildi', 'success');
+        onSuccess();
+    } catch (error) {
+        showToast(error.message || 'Kaydetme hatası', 'error');
+    }
+}
+
+function loadBusinessProfileForOnboarding() {
+    loadBusinessProfile('onboarding');
+}
+
+async function changeOnboardingPassword() {
+    const oldPassword = document.getElementById('onboarding-old-password').value;
+    const newPassword = document.getElementById('onboarding-new-password').value;
+    if (!oldPassword || !newPassword) {
+        showToast('Şifre alanları zorunlu', 'error');
+        return;
+    }
+    if (newPassword.length < 8) {
+        showToast('Yeni şifre en az 8 karakter olmalı', 'error');
+        return;
+    }
+    try {
+        await apiRequest('/users/force-change-password', {
+            method: 'POST',
+            body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })
+        });
+        if (currentUser) {
+            currentUser.force_password_change = false;
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        }
+        showOnboardingScreen('business');
+        showToast('Şifre güncellendi. İşletme bilgilerinizi girin.', 'success');
+    } catch (error) {
+        showToast(error.message || 'Şifre değiştirme hatası', 'error');
+    }
+}
+
+async function saveOnboardingBusiness() {
+    await saveBusinessProfile('onboarding', () => {
+        showMainApp();
+        loadDashboard();
+        showToast('Sisteme hoş geldiniz!', 'success');
+    });
+}
+
+async function submitApplication() {
+    const data = {
+        full_name: document.getElementById('apply-full-name').value.trim(),
+        email: document.getElementById('apply-email').value.trim(),
+        phone: document.getElementById('apply-phone').value.trim(),
+        business_name: document.getElementById('apply-business-name').value.trim(),
+        business_address: document.getElementById('apply-business-address').value.trim(),
+        description: document.getElementById('apply-description').value.trim()
+    };
+    if (!data.full_name || !data.email) {
+        showToast('Ad soyad ve e-posta zorunlu', 'error');
+        return;
+    }
+    try {
+        const result = await apiRequest('/applications', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+        const msgEl = document.getElementById('apply-message');
+        msgEl.textContent = result.message;
+        msgEl.style.background = 'var(--success-color)';
+        msgEl.style.color = '#fff';
+        msgEl.style.display = 'block';
+        document.getElementById('apply-form').reset();
+    } catch (error) {
+        showToast(error.message || 'Başvuru gönderilemedi', 'error');
+    }
+}
+
+function getApplicationStatusLabel(status) {
+    const map = { 'pending': 'Beklemede', 'approved': 'Onaylandı', 'rejected': 'Reddedildi' };
+    return map[status] || status;
+}
+
+async function loadApplications() {
+    try {
+        const status = document.getElementById('applications-filter-status').value;
+        const search = document.getElementById('applications-search').value;
+        const params = new URLSearchParams();
+        if (status) params.append('status', status);
+        if (search) params.append('search', search);
+        const apps = await apiRequest(`/applications?${params.toString()}`);
+        updateApplicationsTable(apps);
+    } catch (error) {
+        showToast(error.message || 'Başvurular yüklenemedi', 'error');
+    }
+}
+
+function updateApplicationsTable(apps) {
+    const tbody = document.getElementById('applications-table-body');
+    if (!apps || apps.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center">Başvuru bulunamadı</td></tr>';
+        return;
+    }
+    tbody.innerHTML = apps.map(app => `
+        <tr>
+            <td>${formatDate(app.created_at)}</td>
+            <td>${app.full_name}</td>
+            <td>${app.email}</td>
+            <td>${app.business_name || '-'}</td>
+            <td><span class="badge badge-${app.status === 'pending' ? 'warning' : app.status === 'approved' ? 'success' : 'danger'}">${getApplicationStatusLabel(app.status)}</span></td>
+            <td>
+                ${app.status === 'pending' ? `
+                    <button class="btn btn-sm btn-success" onclick="reviewApplication('${app.id}', 'approve')">Onayla</button>
+                    <button class="btn btn-sm btn-danger" onclick="reviewApplication('${app.id}', 'reject')">Reddet</button>
+                ` : ''}
+                <button class="btn btn-sm btn-secondary" onclick="deleteApplication('${app.id}')">Sil</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+window.reviewApplication = async function(id, action) {
+    const note = prompt(action === 'approve' ? 'Onay notu (isteğe bağlı)' : 'Ret nedeni (isteğe bağlı)') || '';
+    const username = action === 'approve' ? prompt('Kullanıcı adı (boş bırakılırsa otomatik oluşturulur)') || '' : '';
+    try {
+        const result = await apiRequest(`/applications/${id}/review`, {
+            method: 'POST',
+            body: JSON.stringify({ action, review_note: note, username })
+        });
+        if (action === 'approve' && result.username) {
+            alert(`Kullanıcı oluşturuldu:\nKullanıcı adı: ${result.username}\nGeçici şifre: ${result.temp_password}`);
+        }
+        loadApplications();
+    } catch (error) {
+        showToast(error.message || 'İşlem başarısız', 'error');
+    }
+};
+
+window.deleteApplication = async function(id) {
+    if (!confirm('Bu başvuruyu silmek istediğinize emin misiniz?')) return;
+    try {
+        await apiRequest(`/applications/${id}`, { method: 'DELETE' });
+        loadApplications();
+    } catch (error) {
+        showToast(error.message || 'Silme başarısız', 'error');
+    }
+};
+
+async function loadUsers() {
+    try {
+        const users = await apiRequest('/users');
+        updateUsersTable(users);
+    } catch (error) {
+        showToast(error.message || 'Kullanıcılar yüklenemedi', 'error');
+    }
+}
+
+function updateUsersTable(users) {
+    const tbody = document.getElementById('users-table-body');
+    if (!users || users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center">Kullanıcı bulunamadı</td></tr>';
+        return;
+    }
+    tbody.innerHTML = users.map(u => `
+        <tr>
+            <td>${u.username}</td>
+            <td>${u.full_name || '-'}</td>
+            <td>${u.email || '-'}</td>
+            <td>${u.role}</td>
+            <td><span class="badge badge-${u.status === 'active' ? 'success' : 'secondary'}">${u.status === 'active' ? 'Aktif' : 'Pasif'}</span></td>
+            <td>
+                ${u.id !== 'admin' ? `
+                    <button class="btn btn-sm ${u.status === 'active' ? 'btn-warning' : 'btn-success'}" onclick="toggleUser('${u.id}', '${u.status === 'active' ? 'inactive' : 'active'}')">${u.status === 'active' ? 'Pasif Yap' : 'Aktif Yap'}</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUserAdmin('${u.id}')">Sil</button>
+                ` : '-'}
+            </td>
+        </tr>
+    `).join('');
+}
+
+window.toggleUser = async function(id, status) {
+    try {
+        await apiRequest(`/users/${id}/toggle`, {
+            method: 'POST',
+            body: JSON.stringify({ status })
+        });
+        loadUsers();
+    } catch (error) {
+        showToast(error.message || 'İşlem başarısız', 'error');
+    }
+};
+
+window.deleteUserAdmin = async function(id) {
+    if (!confirm('Bu kullanıcıyı silmek istediğinize emin misiniz?')) return;
+    try {
+        await apiRequest(`/users/${id}`, { method: 'DELETE' });
+        loadUsers();
+    } catch (error) {
+        showToast(error.message || 'Silme başarısız', 'error');
+    }
+};
+
+function loadAccountPage() {
+    loadBusinessProfile('account');
+}
+
+async function saveAccountBusiness() {
+    await saveBusinessProfile('account', () => {
+        showToast('Hesap bilgileri güncellendi', 'success');
+    });
+}
+
+async function changeAccountPassword() {
+    const oldPassword = document.getElementById('account-old-password').value;
+    const newPassword = document.getElementById('account-new-password').value;
+    if (!oldPassword || !newPassword) {
+        showToast('Şifre alanları zorunlu', 'error');
+        return;
+    }
+    if (newPassword.length < 8) {
+        showToast('Yeni şifre en az 8 karakter olmalı', 'error');
+        return;
+    }
+    try {
+        await apiRequest('/users/force-change-password', {
+            method: 'POST',
+            body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })
+        });
+        document.getElementById('account-password-form').reset();
+        showToast('Şifre değiştirildi', 'success');
+    } catch (error) {
+        showToast(error.message || 'Şifre değiştirme hatası', 'error');
+    }
 }

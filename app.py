@@ -11,8 +11,10 @@ from functools import wraps
 import hashlib
 import io
 import json
+import random
 import re
 import socket
+import string
 import traceback
 from html import escape
 from openpyxl import Workbook
@@ -626,19 +628,24 @@ def init_db():
     
     # Apply non-destructive migrations
     migrate_db()
+    migrate_user_system()
 
     # Create/update default admin user
     admin_password = bcrypt.hashpw('EnnerVal1453'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
         cursor.execute('''
-            INSERT INTO users (id, username, password, email, full_name, role)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO users (id, username, password, email, full_name, phone, role, status, business_info_completed, force_password_change)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 password = EXCLUDED.password,
                 email = EXCLUDED.email,
                 full_name = EXCLUDED.full_name,
-                role = EXCLUDED.role
-        ''', ('admin', 'admin', admin_password, 'admin@buraketicaret.com', 'Sistem Yöneticisi', 'admin'))
+                phone = EXCLUDED.phone,
+                role = EXCLUDED.role,
+                status = EXCLUDED.status,
+                business_info_completed = EXCLUDED.business_info_completed,
+                force_password_change = EXCLUDED.force_password_change
+        ''', ('admin', 'admin', admin_password, 'admin@buraketicaret.com', 'Sistem Yöneticisi', '+90 555 123 4567', 'admin', 'active', 1, 0))
     except _IntegrityError:
         pass
 
@@ -664,6 +671,87 @@ def init_db():
     conn.commit()
     conn.close()
 
+def migrate_user_system():
+    """Apply schema migrations for user registration, approval and business profile features."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Applications table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS applications (
+            id TEXT PRIMARY KEY,
+            full_name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT,
+            business_name TEXT,
+            business_address TEXT,
+            description TEXT,
+            status TEXT DEFAULT 'pending',
+            review_note TEXT,
+            reviewed_by TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (reviewed_by) REFERENCES users(id)
+        )
+    ''')
+
+    # Business profiles table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS business_profiles (
+            id TEXT PRIMARY KEY,
+            user_id TEXT UNIQUE NOT NULL,
+            business_name TEXT,
+            authorized_name TEXT,
+            phone TEXT,
+            email TEXT,
+            address TEXT,
+            city TEXT,
+            district TEXT,
+            tax_number TEXT,
+            tax_office TEXT,
+            logo_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+
+    # User status and onboarding columns
+    add_column_if_missing(conn, 'users', 'phone', 'TEXT')
+    add_column_if_missing(conn, 'users', 'status', 'TEXT DEFAULT \'pending\'')
+    add_column_if_missing(conn, 'users', 'business_info_completed', 'INTEGER DEFAULT 0')
+    add_column_if_missing(conn, 'users', 'force_password_change', 'INTEGER DEFAULT 0')
+
+    # Multi-tenancy isolation columns
+    add_column_if_missing(conn, 'products', 'user_id', 'TEXT')
+    add_column_if_missing(conn, 'customers', 'user_id', 'TEXT')
+    add_column_if_missing(conn, 'orders', 'user_id', 'TEXT')
+    add_column_if_missing(conn, 'categories', 'user_id', 'TEXT')
+    add_column_if_missing(conn, 'suppliers', 'user_id', 'TEXT')
+    add_column_if_missing(conn, 'stock_movements', 'user_id', 'TEXT')
+    add_column_if_missing(conn, 'returns', 'user_id', 'TEXT')
+    add_column_if_missing(conn, 'coupons', 'user_id', 'TEXT')
+    add_column_if_missing(conn, 'finance_transactions', 'user_id', 'TEXT')
+
+    # Backfill existing records to admin
+    try:
+        cursor.execute('SELECT id FROM users WHERE role = ? LIMIT 1', ('admin',))
+        admin_row = cursor.fetchone()
+        if admin_row:
+            admin_id = admin_row['id']
+            for table in ('products', 'customers', 'orders', 'categories', 'suppliers',
+                          'stock_movements', 'returns', 'coupons', 'finance_transactions'):
+                cursor.execute(f'UPDATE {table} SET user_id = ? WHERE user_id IS NULL', (admin_id,))
+            cursor.execute('''
+                UPDATE users SET status = ?, business_info_completed = ?, force_password_change = ?
+                WHERE status = ?
+            ''', ('active', 1, 0, 'pending'))
+    except Exception:
+        pass
+
+    conn.commit()
+    conn.close()
+
 # Initialize database on startup
 init_db()
 
@@ -674,12 +762,34 @@ def require_auth_for_api():
         return None
     if not request.path.startswith('/api/'):
         return None
-    if request.path in ('/api/auth/login', '/api/auth/register', '/api/network/info'):
+    if request.path in ('/api/auth/login', '/api/auth/register', '/api/applications', '/api/network/info'):
         return None
     try:
         verify_jwt_in_request()
     except Exception:
         return jsonify({'error': 'Giriş gerekli. Lütfen tekrar giriş yapın.'}), 401
+
+    user_id = get_jwt_identity()
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT status, business_info_completed, force_password_change, role FROM users WHERE id = ?', (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+
+    if not user:
+        return jsonify({'error': 'Kullanıcı bulunamadı'}), 401
+
+    # Onboarding endpoints are allowed without completion
+    onboarding_paths = ('/api/auth/logout', '/api/users/profile', '/api/users/change-password', '/api/users/force-change-password', '/api/business-profile')
+    if request.path in onboarding_paths or request.path.startswith('/api/business-profile'):
+        return None
+
+    if user['status'] != 'active':
+        return jsonify({'error': 'Hesabınız aktif değil. Yönetici onayı bekleniyor.'}), 403
+    if user['force_password_change'] == 1:
+        return jsonify({'error': 'Yeni şifre belirlemeniz gerekiyor.'}), 403
+    if user['business_info_completed'] == 0:
+        return jsonify({'error': 'İşletme bilgilerinizi tamamlamanız gerekiyor.'}), 403
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
@@ -705,6 +815,312 @@ def serve_static(path):
 @app.route('/uploads/<path:path>')
 def serve_uploads(path):
     return send_from_directory('uploads', path)
+
+def _username_available(username):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM users WHERE username = ?', (username,))
+    exists = cursor.fetchone() is not None
+    conn.close()
+    return not exists
+
+def generate_temp_password(length=12):
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(random.choice(alphabet) for _ in range(length))
+
+def generate_username(name, requested=None):
+    if requested and _username_available(requested):
+        return requested
+    base = str(name or 'kullanici').lower().strip()
+    base = base.translate(_TR_TRANSLATION)
+    base = re.sub(r'[^a-z0-9]', '', base)
+    base = (base or 'kullanici')[:20]
+    candidate = base
+    counter = 1
+    while not _username_available(candidate):
+        candidate = f"{base}{counter:03d}"
+        counter += 1
+    return candidate
+
+@app.route('/api/applications', methods=['POST'])
+def submit_application():
+    data = request.json or {}
+    required = ['full_name', 'email']
+    missing = [f for f in required if not data.get(f)]
+    if missing:
+        return jsonify({'error': 'Eksik alanlar: ' + ', '.join(missing)}), 400
+
+    full_name = data.get('full_name', '').strip()
+    email = data.get('email', '').strip()
+    phone = (data.get('phone') or '').strip()
+    business_name = (data.get('business_name') or '').strip()
+    business_address = (data.get('business_address') or '').strip()
+    description = (data.get('description') or '').strip()
+
+    if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email):
+        return jsonify({'error': 'Geçerli bir e-posta adresi girin'}), 400
+    if phone and not re.match(r'^[+0-9\s\-\(\)]{7,}$', phone):
+        return jsonify({'error': 'Geçerli bir telefon numarası girin'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM applications WHERE email = ? AND status = ?', (email, 'pending'))
+    if cursor.fetchone():
+        conn.close()
+        return jsonify({'error': 'Bu e-posta ile zaten bekleyen bir başvuru var'}), 409
+
+    application_id = str(uuid.uuid4())
+    cursor.execute('''
+        INSERT INTO applications (id, full_name, email, phone, business_name, business_address, description, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ''', (application_id, full_name, email, phone, business_name, business_address, description, 'pending'))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Başvurunuz alındı. Yönetici onayı bekleniyor.', 'id': application_id}), 201
+
+@app.route('/api/applications', methods=['GET'])
+@admin_required
+def list_applications():
+    status = request.args.get('status', '')
+    search = request.args.get('search', '')
+    conn = get_db()
+    cursor = conn.cursor()
+    query = 'SELECT * FROM applications WHERE 1=1'
+    params = []
+    if status:
+        query += ' AND status = ?'
+        params.append(status)
+    if search:
+        query += ' AND (full_name LIKE ? OR email LIKE ? OR business_name LIKE ?)'
+        like = f'%{search}%'
+        params.extend([like, like, like])
+    query += ' ORDER BY created_at DESC'
+    cursor.execute(query, tuple(params))
+    applications = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(applications)
+
+@app.route('/api/applications/<id>', methods=['GET'])
+@admin_required
+def get_application(id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM applications WHERE id = ?', (id,))
+    application = cursor.fetchone()
+    conn.close()
+    if not application:
+        return jsonify({'error': 'Başvuru bulunamadı'}), 404
+    return jsonify(dict(application))
+
+@app.route('/api/applications/<id>', methods=['DELETE'])
+@admin_required
+def delete_application(id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM applications WHERE id = ?', (id,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({'error': 'Başvuru bulunamadı'}), 404
+    cursor.execute('DELETE FROM applications WHERE id = ?', (id,))
+    conn.commit()
+    conn.close()
+    log_activity('application_deleted', 'application', id)
+    return jsonify({'message': 'Başvuru silindi'})
+
+@app.route('/api/applications/<id>/review', methods=['POST'])
+@admin_required
+def review_application(id):
+    data = request.json or {}
+    action = data.get('action')
+    review_note = (data.get('review_note') or '').strip()
+
+    if action not in ('approve', 'reject'):
+        return jsonify({'error': 'Geçersiz işlem. approve veya reject gönderin'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM applications WHERE id = ?', (id,))
+    application = cursor.fetchone()
+    if not application:
+        conn.close()
+        return jsonify({'error': 'Başvuru bulunamadı'}), 404
+    if application['status'] != 'pending':
+        conn.close()
+        return jsonify({'error': 'Başvuru zaten işlenmiş'}), 400
+
+    if action == 'reject':
+        cursor.execute('''
+            UPDATE applications SET status = ?, review_note = ?, reviewed_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        ''', ('rejected', review_note, get_current_user_id(), id))
+        conn.commit()
+        conn.close()
+        log_activity('application_rejected', 'application', id)
+        return jsonify({'message': 'Başvuru reddedildi'})
+
+    # Approve: create user and business profile
+    requested_username = (data.get('username') or '').strip()
+    full_name = application['full_name']
+    business_name = application['business_name']
+    username = generate_username(business_name or full_name, requested_username or None)
+    temp_password = generate_temp_password()
+    password_hash = bcrypt.hashpw(temp_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    user_id = str(uuid.uuid4())
+
+    cursor.execute('''
+        INSERT INTO users (id, username, password, email, full_name, phone, role, status, business_info_completed, force_password_change, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ''', (user_id, username, password_hash, application['email'], full_name, application['phone'], 'user', 'active', 0, 1))
+
+    cursor.execute('''
+        UPDATE applications SET status = ?, review_note = ?, reviewed_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    ''', ('approved', review_note, get_current_user_id(), id))
+
+    # Create empty business profile placeholder
+    cursor.execute('''
+        INSERT INTO business_profiles (id, user_id, business_name, phone, email, address, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ''', (str(uuid.uuid4()), user_id, business_name, application['phone'], application['email'], application['business_address']))
+
+    conn.commit()
+    conn.close()
+    log_activity('application_approved', 'application', id, {'username': username})
+    return jsonify({
+        'message': 'Başvuru onaylandı ve kullanıcı oluşturuldu',
+        'username': username,
+        'temp_password': temp_password
+    })
+
+@app.route('/api/users', methods=['GET'])
+@admin_required
+def list_users():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, username, email, full_name, phone, role, status, business_info_completed, force_password_change, created_at, updated_at
+        FROM users ORDER BY created_at DESC
+    ''')
+    users = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(users)
+
+@app.route('/api/users/<id>/toggle', methods=['POST'])
+@admin_required
+def toggle_user(id):
+    data = request.json or {}
+    status = data.get('status')
+    if status not in ('active', 'inactive'):
+        return jsonify({'error': 'Geçersiz durum'}), 400
+    if id == 'admin':
+        return jsonify({'error': 'Admin hesabı pasif yapılamaz'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE users SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (status, id))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Kullanıcı bulunamadı'}), 404
+    conn.commit()
+    conn.close()
+    return jsonify({'message': f'Kullanıcı durumu {status} olarak güncellendi'})
+
+@app.route('/api/users/<id>', methods=['DELETE'])
+@admin_required
+def delete_user_admin(id):
+    if id == 'admin':
+        return jsonify({'error': 'Admin hesabı silinemez'}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM business_profiles WHERE user_id = ?', (id,))
+    cursor.execute('DELETE FROM activity_logs WHERE user_id = ?', (id,))
+    cursor.execute('DELETE FROM finance_transactions WHERE created_by = ?', (id,))
+    cursor.execute('DELETE FROM stock_movements WHERE created_by = ?', (id,))
+    cursor.execute('DELETE FROM users WHERE id = ?', (id,))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Kullanıcı bulunamadı'}), 404
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Kullanıcı silindi'})
+
+@app.route('/api/business-profile', methods=['GET'])
+def get_business_profile():
+    user_id = get_current_user_id()
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM business_profiles WHERE user_id = ?', (user_id,))
+    profile = cursor.fetchone()
+    conn.close()
+    if not profile:
+        return jsonify({})
+    return jsonify(dict(profile))
+
+@app.route('/api/business-profile', methods=['PUT'])
+def save_business_profile():
+    data = request.json or {}
+    user_id = get_current_user_id()
+    required = ['business_name', 'authorized_name', 'phone', 'email', 'address', 'city', 'district']
+    missing = [f for f in required if not data.get(f)]
+    if missing:
+        return jsonify({'error': 'Eksik alanlar: ' + ', '.join(missing)}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM business_profiles WHERE user_id = ?', (user_id,))
+    exists = cursor.fetchone() is not None
+
+    if exists:
+        cursor.execute('''
+            UPDATE business_profiles SET
+                business_name = ?, authorized_name = ?, phone = ?, email = ?, address = ?, city = ?,
+                district = ?, tax_number = ?, tax_office = ?, logo_url = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        ''', (data.get('business_name'), data.get('authorized_name'), data.get('phone'), data.get('email'),
+              data.get('address'), data.get('city'), data.get('district'), data.get('tax_number'),
+              data.get('tax_office'), data.get('logo_url'), user_id))
+    else:
+        cursor.execute('''
+            INSERT INTO business_profiles (id, user_id, business_name, authorized_name, phone, email, address, city, district, tax_number, tax_office, logo_url, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ''', (str(uuid.uuid4()), user_id, data.get('business_name'), data.get('authorized_name'), data.get('phone'),
+              data.get('email'), data.get('address'), data.get('city'), data.get('district'), data.get('tax_number'),
+              data.get('tax_office'), data.get('logo_url')))
+
+    cursor.execute('''
+        UPDATE users SET full_name = ?, email = ?, phone = ?, business_info_completed = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    ''', (data.get('authorized_name'), data.get('email'), data.get('phone'), user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'İşletme bilgileri kaydedildi'})
+
+@app.route('/api/users/force-change-password', methods=['POST'])
+def force_change_password():
+    data = request.json or {}
+    old_password = data.get('old_password', '')
+    new_password = data.get('new_password', '')
+
+    if not old_password or not new_password:
+        return jsonify({'error': 'Mevcut şifre ve yeni şifre gerekli'}), 400
+    if len(new_password) < 8:
+        return jsonify({'error': 'Yeni şifre en az 8 karakter olmalı'}), 400
+
+    user_id = get_current_user_id()
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT password, force_password_change FROM users WHERE id = ?', (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return jsonify({'error': 'Kullanıcı bulunamadı'}), 404
+    if not bcrypt.checkpw(old_password.encode('utf-8'), user['password'].encode('utf-8')):
+        conn.close()
+        return jsonify({'error': 'Mevcut şifre hatalı'}), 401
+
+    new_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    cursor.execute('''
+        UPDATE users SET password = ?, force_password_change = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    ''', (new_hash, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Şifre güncellendi. Artık sistemi normal şekilde kullanabilirsiniz.'})
 
 def get_local_ip():
     try:
@@ -734,24 +1150,30 @@ def login():
     data = request.json
     username = data.get('username')
     password = data.get('password')
-    
+
     if not username or not password:
         return jsonify({'error': 'Kullanıcı adı ve şifre gerekli'}), 400
-    
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
     user = cursor.fetchone()
     conn.close()
-    
+
     if not user or not bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
         return jsonify({'error': 'Geçersiz kullanıcı adı veya şifre'}), 401
-    
+
+    if user['status'] != 'active':
+        return jsonify({'error': 'Hesabınız aktif değil. Yönetici onayı bekleniyor.'}), 403
+
     access_token = create_access_token(identity=user['id'], additional_claims={
         'username': user['username'],
-        'role': user['role']
+        'role': user['role'],
+        'status': user['status'],
+        'business_info_completed': bool(user['business_info_completed']),
+        'force_password_change': bool(user['force_password_change'])
     })
-    
+
     return jsonify({
         'token': access_token,
         'user': {
@@ -760,6 +1182,9 @@ def login():
             'email': user['email'],
             'full_name': user['full_name'],
             'role': user['role'],
+            'status': user['status'],
+            'business_info_completed': bool(user['business_info_completed']),
+            'force_password_change': bool(user['force_password_change']),
             'theme': user['theme'],
             'language': user['language']
         }
@@ -982,6 +1407,9 @@ def get_products():
     conn = get_db()
     cursor = conn.cursor()
     
+    current_user_id = get_current_user_id()
+    is_admin = get_current_user_role() == 'admin'
+
     query = '''
         SELECT p.*, c.name as category_name
         FROM products p
@@ -989,6 +1417,10 @@ def get_products():
         WHERE p.deleted_at IS NULL
     '''
     params = []
+
+    if not is_admin:
+        query += ' AND p.user_id = ?'
+        params.append(current_user_id)
 
     if category_id:
         query += ' AND p.category_id = ?'
@@ -1017,6 +1449,10 @@ def get_products():
     count_query = 'SELECT COUNT(*) as total FROM products WHERE deleted_at IS NULL'
     count_params = []
 
+    if not is_admin:
+        count_query += ' AND user_id = ?'
+        count_params.append(current_user_id)
+
     if category_id:
         count_query += ' AND category_id = ?'
         count_params.append(category_id)
@@ -1043,12 +1479,20 @@ def get_products():
 def get_product(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT p.*, c.name as category_name
-        FROM products p
-        LEFT JOIN categories c ON p.category_id = c.id
-        WHERE p.id = ? AND p.deleted_at IS NULL
-    ''', (id,))
+    if get_current_user_role() == 'admin':
+        cursor.execute('''
+            SELECT p.*, c.name as category_name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.id
+            WHERE p.id = ? AND p.deleted_at IS NULL
+        ''', (id,))
+    else:
+        cursor.execute('''
+            SELECT p.*, c.name as category_name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.id
+            WHERE p.id = ? AND p.deleted_at IS NULL AND p.user_id = ?
+        ''', (id, get_current_user_id()))
     product = cursor.fetchone()
     conn.close()
 
@@ -1117,10 +1561,11 @@ def create_product():
             sku = generate_sku(name, category=category_name)
 
         product_id = str(uuid.uuid4())
+        user_id = get_current_user_id()
         cursor.execute('''
-            INSERT INTO products (id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (product_id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs))
+            INSERT INTO products (id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (product_id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs, user_id))
 
         if stock_quantity > 0:
             _insert_stock_movement(cursor, product_id, stock_quantity, 'initial', notes='İlk stok girişi')
@@ -1157,8 +1602,13 @@ def update_product(id):
     data = request.json or {}
     conn = get_db()
     cursor = conn.cursor()
+    is_admin = get_current_user_role() == 'admin'
+    current_user_id = get_current_user_id()
 
-    cursor.execute('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL', (id,))
+    if is_admin:
+        cursor.execute('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL', (id,))
+    else:
+        cursor.execute('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL AND user_id = ?', (id, current_user_id))
     product = cursor.fetchone()
     if not product:
         conn.close()
@@ -1218,17 +1668,30 @@ def update_product(id):
         cursor.execute('INSERT INTO sku_registry (sku, entity_type, entity_id) VALUES (?, ?, ?)', (new_sku, 'product', id))
     sku = new_sku or old_sku
 
-    cursor.execute('''
-        UPDATE products SET name = ?, description = ?, price = ?, cost_price = ?, stock_quantity = ?,
-        category_id = ?, sku = ?, barcode = ?, image_url = ?, is_active = ?, low_stock_threshold = ?,
-        packaging_cost = ?, commission = ?, other_costs = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    ''', (
-        name, description, price, cost_price, stock_quantity,
-        category_id, sku, barcode, image_url,
-        is_active, low_stock_threshold,
-        packaging_cost, commission, other_costs, id
-    ))
+    if is_admin:
+        cursor.execute('''
+            UPDATE products SET name = ?, description = ?, price = ?, cost_price = ?, stock_quantity = ?,
+            category_id = ?, sku = ?, barcode = ?, image_url = ?, is_active = ?, low_stock_threshold = ?,
+            packaging_cost = ?, commission = ?, other_costs = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ''', (
+            name, description, price, cost_price, stock_quantity,
+            category_id, sku, barcode, image_url,
+            is_active, low_stock_threshold,
+            packaging_cost, commission, other_costs, id
+        ))
+    else:
+        cursor.execute('''
+            UPDATE products SET name = ?, description = ?, price = ?, cost_price = ?, stock_quantity = ?,
+            category_id = ?, sku = ?, barcode = ?, image_url = ?, is_active = ?, low_stock_threshold = ?,
+            packaging_cost = ?, commission = ?, other_costs = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND user_id = ?
+        ''', (
+            name, description, price, cost_price, stock_quantity,
+            category_id, sku, barcode, image_url,
+            is_active, low_stock_threshold,
+            packaging_cost, commission, other_costs, id, current_user_id
+        ))
 
     if stock_diff != 0:
         _insert_stock_movement(cursor, id, stock_diff, 'adjustment', notes='Stok güncelleme')
@@ -1243,13 +1706,21 @@ def update_product(id):
 def delete_product(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT sku FROM products WHERE id = ? AND deleted_at IS NULL', (id,))
+    is_admin = get_current_user_role() == 'admin'
+    current_user_id = get_current_user_id()
+    if is_admin:
+        cursor.execute('SELECT sku FROM products WHERE id = ? AND deleted_at IS NULL', (id,))
+    else:
+        cursor.execute('SELECT sku FROM products WHERE id = ? AND deleted_at IS NULL AND user_id = ?', (id, current_user_id))
     product = cursor.fetchone()
     if not product:
         conn.close()
         return jsonify({'error': 'Ürün bulunamadı'}), 404
 
-    cursor.execute('UPDATE products SET deleted_at = CURRENT_TIMESTAMP, is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    if is_admin:
+        cursor.execute('UPDATE products SET deleted_at = CURRENT_TIMESTAMP, is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    else:
+        cursor.execute('UPDATE products SET deleted_at = CURRENT_TIMESTAMP, is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', (id, current_user_id))
     cursor.execute('UPDATE sku_registry SET deleted_at = CURRENT_TIMESTAMP WHERE sku = ?', (product['sku'],))
     conn.commit()
     conn.close()
@@ -1265,8 +1736,15 @@ def get_customers():
     conn = get_db()
     cursor = conn.cursor()
 
+    current_user_id = get_current_user_id()
+    is_admin = get_current_user_role() == 'admin'
+
     query = 'SELECT * FROM customers WHERE deleted_at IS NULL'
     params = []
+
+    if not is_admin:
+        query += ' AND user_id = ?'
+        params.append(current_user_id)
 
     if search:
         query += ' AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)'
@@ -1285,7 +1763,12 @@ def get_customers():
 def get_customer(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM customers WHERE id = ? AND deleted_at IS NULL', (id,))
+    is_admin = get_current_user_role() == 'admin'
+    current_user_id = get_current_user_id()
+    if is_admin:
+        cursor.execute('SELECT * FROM customers WHERE id = ? AND deleted_at IS NULL', (id,))
+    else:
+        cursor.execute('SELECT * FROM customers WHERE id = ? AND deleted_at IS NULL AND user_id = ?', (id, current_user_id))
     customer = cursor.fetchone()
     conn.close()
     if not customer:
@@ -1301,11 +1784,12 @@ def create_customer():
         return jsonify({'error': 'Müşteri adı gerekli'}), 400
 
     customer_id = str(uuid.uuid4())
+    user_id = get_current_user_id()
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO customers (id, name, email, phone, address, city, tax_number, tax_office)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO customers (id, name, email, phone, address, city, tax_number, tax_office, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         customer_id,
         name,
@@ -1314,7 +1798,8 @@ def create_customer():
         data.get('address'),
         data.get('city'),
         data.get('tax_number'),
-        data.get('tax_office')
+        data.get('tax_office'),
+        user_id
     ))
     conn.commit()
     conn.close()
@@ -1340,20 +1825,39 @@ def update_customer(id):
 
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, city = ?,
-        tax_number = ?, tax_office = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND deleted_at IS NULL
-    ''', (
-        name,
-        data.get('email'),
-        data.get('phone'),
-        data.get('address'),
-        data.get('city'),
-        data.get('tax_number'),
-        data.get('tax_office'),
-        id
-    ))
+    is_admin = get_current_user_role() == 'admin'
+    current_user_id = get_current_user_id()
+    if is_admin:
+        cursor.execute('''
+            UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, city = ?,
+            tax_number = ?, tax_office = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND deleted_at IS NULL
+        ''', (
+            name,
+            data.get('email'),
+            data.get('phone'),
+            data.get('address'),
+            data.get('city'),
+            data.get('tax_number'),
+            data.get('tax_office'),
+            id
+        ))
+    else:
+        cursor.execute('''
+            UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, city = ?,
+            tax_number = ?, tax_office = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND deleted_at IS NULL AND user_id = ?
+        ''', (
+            name,
+            data.get('email'),
+            data.get('phone'),
+            data.get('address'),
+            data.get('city'),
+            data.get('tax_number'),
+            data.get('tax_office'),
+            id,
+            current_user_id
+        ))
     if cursor.rowcount == 0:
         conn.close()
         return jsonify({'error': 'Müşteri bulunamadı'}), 404
@@ -1367,7 +1871,12 @@ def update_customer(id):
 def delete_customer(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('UPDATE customers SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    is_admin = get_current_user_role() == 'admin'
+    current_user_id = get_current_user_id()
+    if is_admin:
+        cursor.execute('UPDATE customers SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    else:
+        cursor.execute('UPDATE customers SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', (id, current_user_id))
     if cursor.rowcount == 0:
         conn.close()
         return jsonify({'error': 'Müşteri bulunamadı'}), 404
@@ -1391,6 +1900,8 @@ def get_orders():
 
     conn = get_db()
     cursor = conn.cursor()
+    current_user_id = get_current_user_id()
+    is_admin = get_current_user_role() == 'admin'
 
     query = '''
         SELECT o.*, c.name as customer_name
@@ -1399,6 +1910,10 @@ def get_orders():
         WHERE o.deleted_at IS NULL
     '''
     params = []
+
+    if not is_admin:
+        query += ' AND o.user_id = ?'
+        params.append(current_user_id)
 
     if status:
         query += ' AND o.status = ?'
@@ -1430,6 +1945,10 @@ def get_orders():
     # Get total count
     count_query = 'SELECT COUNT(*) as total FROM orders o LEFT JOIN customers c ON o.customer_id = c.id WHERE o.deleted_at IS NULL'
     count_params = []
+
+    if not is_admin:
+        count_query += ' AND o.user_id = ?'
+        count_params.append(current_user_id)
 
     if status:
         count_query += ' AND o.status = ?'
@@ -1469,12 +1988,22 @@ def get_orders():
 def get_order(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT o.*, c.name as customer_name
-        FROM orders o
-        LEFT JOIN customers c ON o.customer_id = c.id
-        WHERE o.id = ? AND o.deleted_at IS NULL
-    ''', (id,))
+    is_admin = get_current_user_role() == 'admin'
+    current_user_id = get_current_user_id()
+    if is_admin:
+        cursor.execute('''
+            SELECT o.*, c.name as customer_name
+            FROM orders o
+            LEFT JOIN customers c ON o.customer_id = c.id
+            WHERE o.id = ? AND o.deleted_at IS NULL
+        ''', (id,))
+    else:
+        cursor.execute('''
+            SELECT o.*, c.name as customer_name
+            FROM orders o
+            LEFT JOIN customers c ON o.customer_id = c.id
+            WHERE o.id = ? AND o.deleted_at IS NULL AND o.user_id = ?
+        ''', (id, current_user_id))
     order = cursor.fetchone()
 
     if not order:
@@ -1544,10 +2073,11 @@ def create_order():
     order_id = str(uuid.uuid4())
     order_number = f'ORD-{int(datetime.now().timestamp())}'
 
+    user_id = get_current_user_id()
     cursor.execute('''
-        INSERT INTO orders (id, customer_id, order_number, status, subtotal, tax, shipping_cost, discount, total, notes, shipping_status)
-        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 'pending')
-    ''', (order_id, customer_id, order_number, subtotal, tax, shipping_cost, discount, total, notes))
+        INSERT INTO orders (id, customer_id, order_number, status, subtotal, tax, shipping_cost, discount, total, notes, shipping_status, user_id)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 'pending', ?)
+    ''', (order_id, customer_id, order_number, subtotal, tax, shipping_cost, discount, total, notes, user_id))
 
     for item in items:
         order_item_id = str(uuid.uuid4())
@@ -1597,8 +2127,13 @@ def update_order(id):
 
     conn = get_db()
     cursor = conn.cursor()
+    is_admin = get_current_user_role() == 'admin'
+    current_user_id = get_current_user_id()
 
-    cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL', (id,))
+    if is_admin:
+        cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL', (id,))
+    else:
+        cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL AND user_id = ?', (id, current_user_id))
     order = cursor.fetchone()
     if not order:
         conn.close()
@@ -1648,8 +2183,13 @@ def update_order(id):
 
     if fields:
         params.append(id)
-        query = f"UPDATE orders SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-        cursor.execute(query, tuple(params))
+        if is_admin:
+            query = f"UPDATE orders SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+            cursor.execute(query, tuple(params))
+        else:
+            params.append(current_user_id)
+            query = f"UPDATE orders SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?"
+            cursor.execute(query, tuple(params))
 
     conn.commit()
     conn.close()
@@ -1661,8 +2201,13 @@ def update_order(id):
 def delete_order(id):
     conn = get_db()
     cursor = conn.cursor()
+    is_admin = get_current_user_role() == 'admin'
+    current_user_id = get_current_user_id()
 
-    cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL', (id,))
+    if is_admin:
+        cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL', (id,))
+    else:
+        cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL AND user_id = ?', (id, current_user_id))
     order = cursor.fetchone()
     if not order:
         conn.close()
@@ -1676,7 +2221,10 @@ def delete_order(id):
             cursor.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', (qty, item['product_id']))
             _insert_stock_movement(cursor, item['product_id'], qty, 'return', reference_id=id, reference_type='order', notes='Sipariş silinme - stok iadesi')
 
-    cursor.execute('UPDATE orders SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    if is_admin:
+        cursor.execute('UPDATE orders SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    else:
+        cursor.execute('UPDATE orders SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', (id, current_user_id))
     conn.commit()
     conn.close()
 
