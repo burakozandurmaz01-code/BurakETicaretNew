@@ -8,8 +8,8 @@ import uuid
 from datetime import datetime, timedelta
 from functools import wraps
 import hashlib
-import pandas as pd
 import io
+from openpyxl import Workbook
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -1915,13 +1915,25 @@ def export_orders():
     
     if format_type == 'excel':
         # Convert to Excel
-        df = pd.DataFrame([dict(order) for order in orders])
-        df.columns = ['Sipariş No', 'Müşteri', 'Durum', 'Ara Toplam', 'Vergi', 'Kargo', 'İndirim', 'Toplam', 'Tarih']
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Siparişler'
+        ws.append(['Sipariş No', 'Müşteri', 'Durum', 'Ara Toplam', 'Vergi', 'Kargo', 'İndirim', 'Toplam', 'Tarih'])
+        for order in orders:
+            ws.append([
+                order['order_number'],
+                order['customer_name'] or '',
+                order['status'],
+                order['subtotal'],
+                order['tax'],
+                order['shipping_cost'],
+                order['discount'],
+                order['total'],
+                order['created_at']
+            ])
         
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Siparişler')
-        
+        wb.save(output)
         output.seek(0)
         
         response = app.response_class(
@@ -1979,13 +1991,27 @@ def export_products():
     conn.close()
     
     if format_type == 'excel':
-        df = pd.DataFrame([dict(product) for product in products])
-        df.columns = ['Ürün Adı', 'Açıklama', 'Satış Fiyatı', 'Maliyet', 'Stok', 'SKU', 'Barkod', 'Kategori', 'Durum', 'Oluşturma Tarihi']
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Ürünler'
+        ws.append(['Ürün Adı', 'Açıklama', 'Satış Fiyatı', 'Maliyet', 'Stok', 'SKU', 'Barkod', 'Kategori', 'Durum', 'Oluşturma Tarihi'])
+        
+        for product in products:
+            ws.append([
+                product['name'],
+                product['description'] or '',
+                product['price'],
+                product['cost_price'] or '',
+                product['stock_quantity'],
+                product['sku'] or '',
+                product['barcode'] or '',
+                product['category_name'] or '',
+                'Aktif' if product['is_active'] else 'Pasif',
+                product['created_at']
+            ])
         
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Ürünler')
-        
+        wb.save(output)
         output.seek(0)
         
         response = app.response_class(
@@ -2037,13 +2063,27 @@ def export_customers():
     conn.close()
     
     if format_type == 'excel':
-        df = pd.DataFrame([dict(customer) for customer in customers])
-        df.columns = ['ID', 'Ad Soyad', 'E-posta', 'Telefon', 'Adres', 'Şehir', 'Vergi No', 'Vergi Dairesi', 'Oluşturma Tarihi', 'Güncelleme Tarihi']
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Müşteriler'
+        ws.append(['ID', 'Ad Soyad', 'E-posta', 'Telefon', 'Adres', 'Şehir', 'Vergi No', 'Vergi Dairesi', 'Oluşturma Tarihi', 'Güncelleme Tarihi'])
+        
+        for customer in customers:
+            ws.append([
+                customer['id'],
+                customer['name'],
+                customer['email'] or '',
+                customer['phone'] or '',
+                customer['address'] or '',
+                customer['city'] or '',
+                customer['tax_number'] or '',
+                customer['tax_office'] or '',
+                customer['created_at'],
+                customer['updated_at']
+            ])
         
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Müşteriler')
-        
+        wb.save(output)
         output.seek(0)
         
         response = app.response_class(
@@ -2106,13 +2146,28 @@ def export_finance():
     conn.close()
     
     if format_type == 'excel':
-        df = pd.DataFrame([dict(t) for t in transactions])
-        df.columns = ['ID', 'Tür', 'Tutar', 'Tarih', 'Kategori', 'Açıklama', 'Referans ID', 'Referans Tür', 'Ödeme Yöntemi', 'Durum', 'Oluşturma Tarihi']
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Finans'
+        ws.append(['ID', 'Tür', 'Tutar', 'Tarih', 'Kategori', 'Açıklama', 'Referans ID', 'Referans Tür', 'Ödeme Yöntemi', 'Durum', 'Oluşturma Tarihi'])
+        
+        for t in transactions:
+            ws.append([
+                t['id'],
+                t['transaction_type'],
+                t['amount'],
+                t['transaction_date'],
+                t['category'] or '',
+                t['description'] or '',
+                t['reference_id'] or '',
+                t['reference_type'] or '',
+                t['payment_method'] or '',
+                t['status'],
+                t['created_at']
+            ])
         
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Finans')
-        
+        wb.save(output)
         output.seek(0)
         
         response = app.response_class(
@@ -2338,7 +2393,9 @@ def generate_stock_report_pdf():
     
     return response
 
+# Initialize database at startup
+init_db()
+
 if __name__ == '__main__':
-    init_db()
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=True, host='0.0.0.0', port=port)
