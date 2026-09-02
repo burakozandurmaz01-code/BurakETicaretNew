@@ -24,31 +24,17 @@ app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'burak-eticaret-
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 jwt = JWTManager(app)
 
-# Database - SQLite for local, PostgreSQL for production (Render)
-DATABASE_URL = os.environ.get('DATABASE_URL')
+# Database - SQLite (Render deployment uses persistent disk or migrate to PostgreSQL later)
 DATABASE_PATH = os.path.join(os.path.dirname(__file__), 'database', 'burak_eticaret.db')
 
-if DATABASE_URL and DATABASE_URL.startswith('postgres'):
-    import psycopg2
-    DB_TYPE = 'postgres'
-else:
-    DB_TYPE = 'sqlite'
-    if not os.path.exists('database'):
-        os.makedirs('database')
+if not os.path.exists('database'):
+    os.makedirs('database')
 
 def get_db():
-    if DB_TYPE == 'postgres':
-        conn = psycopg2.connect(DATABASE_URL)
-        conn.autocommit = False
-        cursor = conn.cursor()
-        # Enable row factory-like behavior using RealDictCursor
-        import psycopg2.extras
-        return psycopg2.extras.DictConnection(DATABASE_URL)
-    else:
-        conn = sqlite3.connect(DATABASE_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute('PRAGMA foreign_keys = ON')
-        return conn
+    conn = sqlite3.connect(DATABASE_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    return conn
 
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads', 'products')
 
@@ -2353,4 +2339,6 @@ def generate_stock_report_pdf():
     return response
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    init_db()
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=True, host='0.0.0.0', port=port)
