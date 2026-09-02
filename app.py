@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 import hashlib
 import io
+from html import escape
 from openpyxl import Workbook
 
 try:
@@ -21,6 +22,8 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 app = Flask(__name__)
 CORS(app)
@@ -98,6 +101,14 @@ UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads', 'products')
 # Ensure directories exist
 os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Register PDF fonts with Turkish character support
+FONT_DIR = os.path.join(os.path.dirname(__file__), 'fonts')
+try:
+    pdfmetrics.registerFont(TTFont('DejaVuSans', os.path.join(FONT_DIR, 'DejaVuSans.ttf')))
+    pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', os.path.join(FONT_DIR, 'DejaVuSans-Bold.ttf')))
+except Exception:
+    pass
 
 def init_db():
     conn = get_db()
@@ -2291,22 +2302,30 @@ def export_finance():
 # PDF Report routes
 @app.route('/api/pdf/invoice/<order_id>', methods=['GET'])
 def generate_invoice_pdf(order_id):
+    STATUS_LABELS = {
+        'pending': 'Bekliyor',
+        'processing': 'İşleniyor',
+        'shipped': 'Kargolandı',
+        'delivered': 'Teslim Edildi',
+        'cancelled': 'İptal Edildi'
+    }
+
     conn = get_db()
     cursor = conn.cursor()
-    
+
     cursor.execute('''
-        SELECT o.*, c.name as customer_name, c.email as customer_email, c.phone as customer_phone, 
+        SELECT o.*, c.name as customer_name, c.email as customer_email, c.phone as customer_phone,
                c.address as customer_address, c.city as customer_city
         FROM orders o
         LEFT JOIN customers c ON o.customer_id = c.id
         WHERE o.id = ?
     ''', (order_id,))
     order = cursor.fetchone()
-    
+
     if not order:
         conn.close()
         return jsonify({'error': 'Sipariş bulunamadı'}), 404
-    
+
     cursor.execute('''
         SELECT oi.*, p.name as product_name
         FROM order_items oi
@@ -2314,110 +2333,145 @@ def generate_invoice_pdf(order_id):
         WHERE oi.order_id = ?
     ''', (order_id,))
     items = cursor.fetchall()
-    
+
     cursor.execute("SELECT * FROM settings WHERE key = 'company_name'")
-    company_name = cursor.fetchone()
+    company_name_row = cursor.fetchone()
     cursor.execute("SELECT * FROM settings WHERE key = 'address'")
-    company_address = cursor.fetchone()
+    company_address_row = cursor.fetchone()
     cursor.execute("SELECT * FROM settings WHERE key = 'phone'")
-    company_phone = cursor.fetchone()
-    
+    company_phone_row = cursor.fetchone()
+
     conn.close()
-    
-    # Create PDF
+
+    created_at = order['created_at']
+    if isinstance(created_at, datetime):
+        created_at_str = created_at.strftime('%d.%m.%Y %H:%M')
+    else:
+        created_at_str = str(created_at)
+
+    status_label = STATUS_LABELS.get(order['status'], order['status'])
+
+    company_name = escape((company_name_row['value'] if company_name_row else 'Şirket') or 'Şirket')
+    company_address = escape((company_address_row['value'] if company_address_row else '') or '')
+    company_phone = escape((company_phone_row['value'] if company_phone_row else '') or '')
+
+    customer_name = escape(order['customer_name'] or '-')
+    customer_phone = escape(order['customer_phone'] or '-')
+    customer_address = escape(f"{order['customer_address'] or ''} {order['customer_city'] or ''}".strip() or '-')
+
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
     styles = getSampleStyleSheet()
     story = []
-    
-    # Title
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=30
-    )
+
+    normal_style = ParagraphStyle('DejaVuNormal', parent=styles['Normal'], fontName='DejaVuSans', fontSize=10, leading=14)
+    bold_style = ParagraphStyle('DejaVuBold', parent=styles['Normal'], fontName='DejaVuSans-Bold', fontSize=10, leading=14)
+    title_style = ParagraphStyle('InvoiceTitle', parent=styles['Heading1'], fontName='DejaVuSans-Bold', fontSize=26, textColor=colors.HexColor('#1e40af'), alignment=2, spaceAfter=12)
+    section_style = ParagraphStyle('SectionHeader', parent=styles['Normal'], fontName='DejaVuSans-Bold', fontSize=11, textColor=colors.white, backColor=colors.HexColor('#1e40af'), leading=16, leftIndent=6, spaceBefore=6, spaceAfter=6)
+    small_style = ParagraphStyle('Small', parent=styles['Normal'], fontName='DejaVuSans', fontSize=9, leading=12, textColor=colors.HexColor('#666666'))
+
+    # Header
     story.append(Paragraph('FATURA', title_style))
+    story.append(Paragraph(
+        f'<font name="DejaVuSans-Bold">Fatura No:</font> {escape(order["order_number"])}<br/>'
+        f'<font name="DejaVuSans-Bold">Tarih:</font> {created_at_str}<br/>'
+        f'<font name="DejaVuSans-Bold">Durum:</font> {status_label}',
+        normal_style
+    ))
     story.append(Spacer(1, 0.2 * inch))
-    
-    # Company info
-    company_info = f"""
-    <b>{company_name['value'] if company_name else 'Şirket'}</b><br/>
-    {company_address['value'] if company_address else ''}<br/>
-    Tel: {company_phone['value'] if company_phone else ''}
-    """
-    story.append(Paragraph(company_info, styles['Normal']))
-    story.append(Spacer(1, 0.3 * inch))
-    
-    # Customer info
-    customer_info = f"""
-    <b>Müşteri:</b> {order['customer_name'] or '-'}<br/>
-    <b>Telefon:</b> {order['customer_phone'] or '-'}<br/>
-    <b>Adres:</b> {order['customer_address'] or ''} {order['customer_city'] or ''}
-    """
-    story.append(Paragraph(customer_info, styles['Normal']))
-    story.append(Spacer(1, 0.3 * inch))
-    
-    # Order info
-    order_info = f"""
-    <b>Sipariş No:</b> {order['order_number']}<br/>
-    <b>Tarih:</b> {order['created_at']}<br/>
-    <b>Durum:</b> {order['status']}
-    """
-    story.append(Paragraph(order_info, styles['Normal']))
-    story.append(Spacer(1, 0.3 * inch))
-    
-    # Items table
-    table_data = [['Ürün', 'Miktar', 'Birim Fiyat', 'Toplam']]
+
+    # Company & customer info side by side
+    company_text = f'<font name="DejaVuSans-Bold">{company_name}</font><br/>{company_address}<br/>Tel: {company_phone}'
+    customer_text = f'<font name="DejaVuSans-Bold">Fatura Bilgileri</font><br/>{customer_name}<br/>{customer_phone}<br/>{customer_address}'
+
+    info_table = Table([[Paragraph(company_text, normal_style), Paragraph(customer_text, normal_style)]], colWidths=[3.3*inch, 3.3*inch])
+    info_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BACKGROUND', (0, 0), (0, 0), colors.HexColor('#f3f4f6')),
+        ('BACKGROUND', (1, 0), (1, 0), colors.HexColor('#eff6ff')),
+        ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#d1d5db')),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+        ('TOPPADDING', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+    ]))
+    story.append(info_table)
+    story.append(Spacer(1, 0.25 * inch))
+
+    # Items
+    story.append(Paragraph('Sipariş Kalemleri', section_style))
+    story.append(Spacer(1, 0.05 * inch))
+
+    table_data = [[Paragraph('Ürün', bold_style), Paragraph('Miktar', bold_style), Paragraph('Birim Fiyat', bold_style), Paragraph('Toplam', bold_style)]]
     for item in items:
         table_data.append([
-            item['product_name'] or '-',
-            str(item['quantity']),
-            f"₺{item['unit_price']:.2f}",
-            f"₺{item['total_price']:.2f}"
+            Paragraph(escape(str(item['product_name'] or '-')), normal_style),
+            Paragraph(str(item['quantity']), normal_style),
+            Paragraph(f"₺{item['unit_price']:.2f}", normal_style),
+            Paragraph(f"₺{item['total_price']:.2f}", normal_style),
         ])
-    
-    table = Table(table_data, colWidths=[3*inch, 1*inch, 1*inch, 1*inch])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+
+    totals_rows = [
+        ['', '', Paragraph('Ara Toplam', bold_style), Paragraph(f"₺{order['subtotal']:.2f}", bold_style)],
+        ['', '', Paragraph('Vergi', bold_style), Paragraph(f"₺{order['tax']:.2f}", bold_style)],
+        ['', '', Paragraph('Kargo', bold_style), Paragraph(f"₺{order['shipping_cost']:.2f}", bold_style)],
+        ['', '', Paragraph('İndirim', bold_style), Paragraph(f"₺{order['discount']:.2f}", bold_style)],
+        ['', '', Paragraph('GENEL TOPLAM', bold_style), Paragraph(f"₺{order['total']:.2f}", bold_style)],
+    ]
+    for row in totals_rows:
+        table_data.append(row)
+
+    n_items = len(items)
+    header_row = 0
+    first_item_row = 1
+    first_total_row = n_items + 1
+
+    col_widths = [3.2*inch, 0.9*inch, 1.2*inch, 1.2*inch]
+    items_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    items_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, header_row), (-1, header_row), colors.HexColor('#1e40af')),
+        ('TEXTCOLOR', (0, header_row), (-1, header_row), colors.white),
+        ('FONTNAME', (0, header_row), (-1, header_row), 'DejaVuSans-Bold'),
+        ('FONTNAME', (0, first_item_row), (-1, first_total_row - 1), 'DejaVuSans'),
+        ('ALIGN', (1, first_item_row), (1, -1), 'CENTER'),
+        ('ALIGN', (2, first_item_row), (3, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, header_row), (-1, header_row), 10),
+        ('TOPPADDING', (0, first_item_row), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, first_item_row), (-1, -1), 8),
+        ('GRID', (0, header_row), (-1, first_total_row - 1), 0.5, colors.HexColor('#d1d5db')),
+        ('BOX', (0, header_row), (-1, first_total_row - 1), 1, colors.HexColor('#1e40af')),
+        ('LINEABOVE', (2, first_total_row), (3, first_total_row), 1, colors.HexColor('#9ca3af')),
+        ('BACKGROUND', (0, first_total_row), (-1, -1), colors.HexColor('#f3f4f6')),
+        ('FONTNAME', (2, first_total_row), (3, -1), 'DejaVuSans-Bold'),
     ]))
-    story.append(table)
-    story.append(Spacer(1, 0.3 * inch))
-    
-    # Totals
-    totals = f"""
-    <b>Ara Toplam:</b> ₺{order['subtotal']:.2f}<br/>
-    <b>Vergi:</b> ₺{order['tax']:.2f}<br/>
-    <b>Kargo:</b> ₺{order['shipping_cost']:.2f}<br/>
-    <b>İndirim:</b> ₺{order['discount']:.2f}<br/>
-    <b>TOPLAM:</b> ₺{order['total']:.2f}
-    """
-    story.append(Paragraph(totals, styles['Normal']))
-    
+    story.append(items_table)
+    story.append(Spacer(1, 0.2 * inch))
+
+    if order['notes']:
+        story.append(Paragraph('Sipariş Notları', section_style))
+        story.append(Spacer(1, 0.05 * inch))
+        story.append(Paragraph(escape(str(order['notes'])), normal_style))
+        story.append(Spacer(1, 0.15 * inch))
+
+    story.append(Paragraph('Teşekkür ederiz.', small_style))
+
     doc.build(story)
     buffer.seek(0)
-    
+
     response = app.response_class(
         buffer.getvalue(),
         mimetype='application/pdf',
         headers={'Content-Disposition': f'attachment; filename=fatura_{order["order_number"]}.pdf'}
     )
-    
+
     return response
 
 @app.route('/api/pdf/stock-report', methods=['GET'])
 def generate_stock_report_pdf():
     conn = get_db()
     cursor = conn.cursor()
-    
+
     cursor.execute('''
         SELECT p.name, p.sku, p.stock_quantity, p.price, c.name as category_name
         FROM products p
@@ -2426,56 +2480,58 @@ def generate_stock_report_pdf():
     ''')
     products = cursor.fetchall()
     conn.close()
-    
+
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
     styles = getSampleStyleSheet()
     story = []
-    
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=30
-    )
+
+    normal_style = ParagraphStyle('StockNormal', parent=styles['Normal'], fontName='DejaVuSans', fontSize=10, leading=13)
+    bold_style = ParagraphStyle('StockBold', parent=styles['Normal'], fontName='DejaVuSans-Bold', fontSize=10, leading=13)
+    title_style = ParagraphStyle('StockTitle', parent=styles['Heading1'], fontName='DejaVuSans-Bold', fontSize=22, textColor=colors.HexColor('#1e40af'), alignment=1, spaceAfter=16)
+
     story.append(Paragraph('STOK RAPORU', title_style))
-    story.append(Spacer(1, 0.2 * inch))
-    story.append(Paragraph(f'Oluşturma Tarihi: {datetime.now().strftime("%d/%m/%Y %H:%M")}', styles['Normal']))
-    story.append(Spacer(1, 0.3 * inch))
-    
-    table_data = [['Ürün', 'SKU', 'Stok', 'Fiyat', 'Kategori']]
+    story.append(Paragraph(f'Oluşturma Tarihi: {datetime.now().strftime("%d.%m.%Y %H:%M")}', normal_style))
+    story.append(Spacer(1, 0.25 * inch))
+
+    table_data = [[Paragraph('Ürün', bold_style), Paragraph('SKU', bold_style), Paragraph('Stok', bold_style), Paragraph('Fiyat', bold_style), Paragraph('Kategori', bold_style)]]
     for product in products:
         table_data.append([
-            product['name'],
-            product['sku'] or '-',
-            str(product['stock_quantity']),
-            f"₺{product['price']:.2f}",
-            product['category_name'] or '-'
+            Paragraph(escape(str(product['name'])), normal_style),
+            Paragraph(escape(str(product['sku'] or '-')), normal_style),
+            Paragraph(str(product['stock_quantity']), normal_style),
+            Paragraph(f"₺{product['price']:.2f}", normal_style),
+            Paragraph(escape(str(product['category_name'] or '-')), normal_style),
         ])
-    
-    table = Table(table_data, colWidths=[3*inch, 1*inch, 1*inch, 1*inch, 1.5*inch])
+
+    table = Table(table_data, colWidths=[3*inch, 1.2*inch, 0.8*inch, 1*inch, 1.5*inch], repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'DejaVuSans-Bold'),
+        ('FONTNAME', (0, 1), (-1, -1), 'DejaVuSans'),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('ALIGN', (2, 1), (2, -1), 'CENTER'),
+        ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+        ('TOPPADDING', (0, 1), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#d1d5db')),
+        ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#1e40af')),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f9fafb')),
     ]))
     story.append(table)
-    
+
     doc.build(story)
     buffer.seek(0)
-    
+
     response = app.response_class(
         buffer.getvalue(),
         mimetype='application/pdf',
         headers={'Content-Disposition': 'attachment; filename=stok_raporu.pdf'}
     )
-    
+
     return response
 
 # Initialize database at startup
