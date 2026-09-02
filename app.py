@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, verify_jwt_in_request
 import sqlite3
 import bcrypt
 import os
@@ -9,6 +9,9 @@ from datetime import datetime, timedelta
 from functools import wraps
 import hashlib
 import io
+import json
+import re
+import traceback
 from html import escape
 from openpyxl import Workbook
 
@@ -96,11 +99,263 @@ def get_db():
         conn.execute('PRAGMA foreign_keys = ON')
         return ConnectionWrapper(conn, 'sqlite')
 
+# ---- Helpers and utilities ----
+
+def _get_connection_type(conn):
+    return getattr(conn, '_db_type', 'sqlite')
+
+def column_exists(conn, table, column):
+    """Check whether a column exists in the connected database."""
+    cursor = conn.cursor()
+    db_type = _get_connection_type(conn)
+    if db_type == 'postgres':
+        cursor.execute('''
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = %s AND column_name = %s
+        ''', (table, column))
+    else:
+        cursor.execute(f'PRAGMA table_info({table})')
+        for row in cursor.fetchall():
+            if row['name'] == column:
+                return True
+        return False
+    return cursor.fetchone() is not None
+
+def add_column_if_missing(conn, table, column, definition):
+    if not column_exists(conn, table, column):
+        cursor = conn.cursor()
+        try:
+            cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+        except Exception:
+            pass
+
+def migrate_db():
+    """Apply non-destructive schema migrations for new features."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # SKU registry ensures deleted SKUs are never reused
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sku_registry (
+            sku TEXT PRIMARY KEY,
+            entity_type TEXT,
+            entity_id TEXT,
+            deleted_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Products cost/tracking columns
+    add_column_if_missing(conn, 'products', 'low_stock_threshold', 'INTEGER DEFAULT 10')
+    add_column_if_missing(conn, 'products', 'packaging_cost', 'REAL DEFAULT 0')
+    add_column_if_missing(conn, 'products', 'commission', 'REAL DEFAULT 0')
+    add_column_if_missing(conn, 'products', 'other_costs', 'REAL DEFAULT 0')
+    add_column_if_missing(conn, 'products', 'deleted_at', 'TIMESTAMP')
+
+    # Soft delete columns
+    add_column_if_missing(conn, 'customers', 'deleted_at', 'TIMESTAMP')
+    add_column_if_missing(conn, 'orders', 'deleted_at', 'TIMESTAMP')
+    add_column_if_missing(conn, 'categories', 'deleted_at', 'TIMESTAMP')
+
+    # Order shipping tracking columns
+    add_column_if_missing(conn, 'orders', 'tracking_number', 'TEXT')
+    add_column_if_missing(conn, 'orders', 'shipping_company', 'TEXT')
+    add_column_if_missing(conn, 'orders', 'shipping_status', 'TEXT DEFAULT \'pending\'')
+
+    # Stock movements created_by already in schema; ensure deleted_at not needed here
+    conn.commit()
+    conn.close()
+
+_TR_TRANSLATION = str.maketrans('çğıöşüÇĞİÖŞÜ', 'cgiosuCGIOSU')
+
+def normalize_for_sku(text):
+    if not text:
+        return ''
+    text = str(text).translate(_TR_TRANSLATION)
+    text = re.sub(r'[^A-Za-z0-9]+', '-', text).strip('-').upper()
+    return text[:25]
+
+def sku_exists(sku):
+    """Return True if SKU is already reserved anywhere in the system."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT 1 FROM (
+            SELECT sku FROM sku_registry WHERE sku = ?
+            UNION
+            SELECT sku FROM products WHERE sku = ? AND deleted_at IS NULL
+            UNION
+            SELECT sku FROM product_variations WHERE sku = ?
+        ) AS reserved
+    ''', (sku, sku, sku))
+    exists = cursor.fetchone() is not None
+    conn.close()
+    return exists
+
+def generate_sku(name, category=None, variation_type=None):
+    """Generate a unique, human-readable SKU."""
+    parts = [normalize_for_sku(p) for p in (category, name, variation_type) if p]
+    prefix = '-'.join(parts) or 'URUN'
+    prefix = prefix[:40]
+
+    candidate = prefix
+    counter = 0
+    while sku_exists(candidate):
+        counter += 1
+        candidate = f"{prefix}-{counter:03d}"
+    return candidate
+
+def register_sku(sku, entity_type, entity_id, deleted_at=None):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO sku_registry (sku, entity_type, entity_id, deleted_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (sku) DO UPDATE SET
+                entity_type = EXCLUDED.entity_type,
+                entity_id = EXCLUDED.entity_id,
+                deleted_at = EXCLUDED.deleted_at
+        ''', (sku, entity_type, entity_id, deleted_at))
+        conn.commit()
+    except _IntegrityError:
+        pass
+    conn.close()
+
+def get_current_user():
+    try:
+        from flask_jwt_extended import get_jwt
+        return get_jwt()
+    except Exception:
+        return {}
+
+def get_current_user_id():
+    try:
+        return get_jwt_identity() or request.headers.get('X-User-ID', 'admin')
+    except Exception:
+        return request.headers.get('X-User-ID', 'admin')
+
+def get_current_user_role():
+    try:
+        from flask_jwt_extended import get_jwt
+        return get_jwt().get('role', 'admin')
+    except Exception:
+        return 'admin'
+
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        role = get_current_user_role()
+        if role != 'admin':
+            return jsonify({'error': 'Bu işlem için yönetici yetkisi gerekli'}), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+def log_activity(action, entity_type=None, entity_id=None, details=None):
+    """Record an activity log entry for the current user."""
+    user_id = get_current_user_id()
+    if not user_id:
+        return
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO activity_logs (id, user_id, action, entity_type, entity_id, details, ip_address, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (str(uuid.uuid4()), user_id, action, entity_type, entity_id,
+              json.dumps(details, ensure_ascii=False, default=str) if details else None,
+              request.remote_addr, request.headers.get('User-Agent')))
+        conn.commit()
+    except Exception:
+        pass
+    conn.close()
+
+def _insert_stock_movement(cursor, product_id, quantity, movement_type, reference_id=None, reference_type=None, notes=None):
+    """Insert a stock movement row using an existing cursor."""
+    user_id = get_current_user_id()
+    cursor.execute('''
+        INSERT INTO stock_movements (id, product_id, movement_type, quantity, reference_id, reference_type, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (str(uuid.uuid4()), product_id, movement_type, quantity, reference_id, reference_type, notes, user_id))
+
+def record_stock_movement(product_id, quantity, movement_type, reference_id=None, reference_type=None, notes=None, adjust=True):
+    """Record a single stock movement and optionally update product stock_quantity."""
+    conn = get_db()
+    cursor = conn.cursor()
+    if adjust:
+        cursor.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', (quantity, product_id))
+    _insert_stock_movement(cursor, product_id, quantity, movement_type, reference_id, reference_type, notes)
+    conn.commit()
+    conn.close()
+
+def _as_dict(row):
+    return row if hasattr(row, 'get') else dict(row)
+
+def get_product_costs(product):
+    """Return per-unit costs for a product, including default zeros."""
+    product = _as_dict(product)
+    return {
+        'cost_price': float(product.get('cost_price') or 0),
+        'packaging_cost': float(product.get('packaging_cost') or 0),
+        'commission': float(product.get('commission') or 0),
+        'other_costs': float(product.get('other_costs') or 0),
+    }
+
+def calculate_product_profit(product):
+    product = _as_dict(product)
+    price = float(product.get('price') or 0)
+    costs = get_product_costs(product)
+    total_cost = sum(costs.values())
+    return round(price - total_cost, 2)
+
+def calculate_order_profit(order, items):
+    """Calculate net profit for an order based on product costs."""
+    order = _as_dict(order)
+    conn = get_db()
+    cursor = conn.cursor()
+    total_cost = 0
+    for it in items:
+        it = _as_dict(it)
+        cursor.execute('SELECT price, cost_price, packaging_cost, commission, other_costs FROM products WHERE id = ?', (it.get('product_id'),))
+        product = cursor.fetchone()
+        if product:
+            costs = get_product_costs(product)
+            total_cost += (costs['cost_price'] + costs['packaging_cost'] + costs['commission'] + costs['other_costs']) * it.get('quantity', 0)
+    conn.close()
+    revenue = float(order.get('total') or 0)
+    shipping = float(order.get('shipping_cost') or 0)
+    discount = float(order.get('discount') or 0)
+    return round(revenue - total_cost - shipping - discount, 2)
+
+def _serialize_row(row):
+    d = dict(row)
+    for k, v in d.items():
+        if isinstance(v, datetime):
+            d[k] = v.isoformat()
+    return d
+
+def _upsert_table(cursor, table, rows, pk='id'):
+    if not rows:
+        return
+    columns = [c for c in rows[0].keys()]
+    cols_str = ', '.join(columns)
+    placeholders = ', '.join('?' * len(columns))
+    update_cols = [c for c in columns if c != pk]
+    if update_cols:
+        update_set = ', '.join(f'{c} = EXCLUDED.{c}' for c in update_cols)
+        query = f'INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) ON CONFLICT ({pk}) DO UPDATE SET {update_set}'
+    else:
+        query = f'INSERT INTO {table} ({cols_str}) VALUES ({placeholders}) ON CONFLICT ({pk}) DO NOTHING'
+    for row in rows:
+        cursor.execute(query, tuple(row[c] for c in columns))
+
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads', 'products')
+BACKUP_DIR = os.path.join(os.path.dirname(__file__), 'backups')
 
 # Ensure directories exist
 os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # Register PDF fonts with Turkish character support
 FONT_DIR = os.path.join(os.path.dirname(__file__), 'fonts')
@@ -365,6 +620,9 @@ def init_db():
         )
     ''')
     
+    # Apply non-destructive migrations
+    migrate_db()
+
     # Create/update default admin user
     admin_password = bcrypt.hashpw('EnnerVal1453'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
@@ -379,7 +637,7 @@ def init_db():
         ''', ('admin', 'admin', admin_password, 'admin@buraketicaret.com', 'Sistem Yöneticisi', 'admin'))
     except _IntegrityError:
         pass
-    
+
     # Create default settings
     default_settings = [
         ('company_name', 'Burak E-Ticaret'),
@@ -404,6 +662,30 @@ def init_db():
 
 # Initialize database on startup
 init_db()
+
+# Global authentication for API endpoints
+@app.before_request
+def require_auth_for_api():
+    if request.method == 'OPTIONS':
+        return None
+    if not request.path.startswith('/api/'):
+        return None
+    if request.path in ('/api/auth/login', '/api/auth/register'):
+        return None
+    try:
+        verify_jwt_in_request()
+    except Exception:
+        return jsonify({'error': 'Giriş gerekli. Lütfen tekrar giriş yapın.'}), 401
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    traceback.print_exc()
+    # Log activity if possible
+    try:
+        log_activity('server_error', details={'error': str(error)})
+    except Exception:
+        pass
+    return jsonify({'error': 'Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.'}), 500
 
 # Serve static files
 @app.route('/')
@@ -437,8 +719,7 @@ def login():
     if not user or not bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
         return jsonify({'error': 'Geçersiz kullanıcı adı veya şifre'}), 401
     
-    access_token = create_access_token(identity={
-        'id': user['id'],
+    access_token = create_access_token(identity=user['id'], additional_claims={
         'username': user['username'],
         'role': user['role']
     })
@@ -480,8 +761,7 @@ def register():
         conn.commit()
         conn.close()
         
-        access_token = create_access_token(identity={
-            'id': user_id,
+        access_token = create_access_token(identity=user_id, additional_claims={
             'username': username,
             'role': 'user'
         })
@@ -583,20 +863,20 @@ def update_theme():
 def get_categories():
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM categories ORDER BY name')
+    cursor.execute('SELECT * FROM categories WHERE deleted_at IS NULL ORDER BY name')
     categories = cursor.fetchall()
     conn.close()
-    
+
     return jsonify([dict(cat) for cat in categories])
 
 @app.route('/api/categories', methods=['POST'])
 def create_category():
-    data = request.json
+    data = request.json or {}
     name = data.get('name')
-    
+
     if not name:
         return jsonify({'error': 'Kategori adı gerekli'}), 400
-    
+
     category_id = str(uuid.uuid4())
     conn = get_db()
     cursor = conn.cursor()
@@ -606,7 +886,8 @@ def create_category():
     ''', (category_id, name, data.get('description'), data.get('parent_id'), data.get('image_url')))
     conn.commit()
     conn.close()
-    
+
+    log_activity('create', 'category', category_id, {'name': name})
     return jsonify({
         'id': category_id,
         'name': name,
@@ -617,26 +898,38 @@ def create_category():
 
 @app.route('/api/categories/<id>', methods=['PUT'])
 def update_category(id):
-    data = request.json
+    data = request.json or {}
+    name = data.get('name')
+    if not name:
+        return jsonify({'error': 'Kategori adı gerekli'}), 400
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
-        UPDATE categories SET name = ?, description = ?, parent_id = ?, image_url = ?
-        WHERE id = ?
-    ''', (data.get('name'), data.get('description'), data.get('parent_id'), data.get('image_url'), id))
+        UPDATE categories SET name = ?, description = ?, parent_id = ?, image_url = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND deleted_at IS NULL
+    ''', (name, data.get('description'), data.get('parent_id'), data.get('image_url'), id))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Kategori bulunamadı'}), 404
     conn.commit()
     conn.close()
-    
+
+    log_activity('update', 'category', id, {'name': name})
     return jsonify({'message': 'Kategori güncellendi'})
 
 @app.route('/api/categories/<id>', methods=['DELETE'])
 def delete_category(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM categories WHERE id = ?', (id,))
+    cursor.execute('UPDATE categories SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Kategori bulunamadı'}), 404
     conn.commit()
     conn.close()
-    
+
+    log_activity('delete', 'category', id, {})
     return jsonify({'message': 'Kategori silindi'})
 
 # Product routes
@@ -655,37 +948,45 @@ def get_products():
         SELECT p.*, c.name as category_name
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
-        WHERE 1=1
+        WHERE p.deleted_at IS NULL
     '''
     params = []
-    
+
     if category_id:
         query += ' AND p.category_id = ?'
         params.append(category_id)
-    
+
     if search:
-        query += ' AND (p.name LIKE ? OR p.description LIKE ? OR p.sku LIKE ?)'
+        query += ' AND (p.name LIKE ? OR p.description LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)'
         search_pattern = f'%{search}%'
-        params.extend([search_pattern, search_pattern, search_pattern])
-    
+        params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
+
     query += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?'
     params.extend([limit, offset])
-    
+
     cursor.execute(query, params)
     products = cursor.fetchall()
-    
+
+    product_list = []
+    for p in products:
+        d = dict(p)
+        d['profit'] = calculate_product_profit(p)
+        d['is_low_stock'] = int(d.get('stock_quantity') or 0) <= int(d.get('low_stock_threshold') or 0)
+        d['is_out_of_stock'] = int(d.get('stock_quantity') or 0) <= 0
+        product_list.append(d)
+
     # Get total count
-    count_query = 'SELECT COUNT(*) as total FROM products WHERE 1=1'
+    count_query = 'SELECT COUNT(*) as total FROM products WHERE deleted_at IS NULL'
     count_params = []
-    
+
     if category_id:
         count_query += ' AND category_id = ?'
         count_params.append(category_id)
-    
+
     if search:
-        count_query += ' AND (name LIKE ? OR description LIKE ? OR sku LIKE ?)'
+        count_query += ' AND (name LIKE ? OR description LIKE ? OR sku LIKE ? OR barcode LIKE ?)'
         search_pattern = f'%{search}%'
-        count_params.extend([search_pattern, search_pattern, search_pattern])
+        count_params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
     
     cursor.execute(count_query, count_params)
     total = cursor.fetchone()['total']
@@ -708,131 +1009,234 @@ def get_product(id):
         SELECT p.*, c.name as category_name
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.id
-        WHERE p.id = ?
+        WHERE p.id = ? AND p.deleted_at IS NULL
     ''', (id,))
     product = cursor.fetchone()
     conn.close()
-    
+
     if not product:
         return jsonify({'error': 'Ürün bulunamadı'}), 404
-    
-    return jsonify(dict(product))
+
+    product_dict = dict(product)
+    product_dict['profit'] = calculate_product_profit(product)
+    product_dict['is_low_stock'] = int(product_dict.get('stock_quantity') or 0) <= int(product_dict.get('low_stock_threshold') or 0)
+    product_dict['is_out_of_stock'] = int(product_dict.get('stock_quantity') or 0) <= 0
+    return jsonify(product_dict)
 
 @app.route('/api/products', methods=['POST'])
 def create_product():
-    data = request.json
+    data = request.json or {}
     name = data.get('name')
     price = data.get('price')
-    stock_quantity = data.get('stock_quantity')
-    
-    if not name or price is None or stock_quantity is None:
-        return jsonify({'error': 'Gerekli alanlar eksik'}), 400
-    
-    product_id = str(uuid.uuid4())
+
+    if not name or price is None:
+        return jsonify({'error': 'Ürün adı ve fiyat zorunludur'}), 400
+
+    try:
+        price = float(price)
+        if price < 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Fiyat geçerli bir pozitif sayı olmalıdır'}), 400
+
+    try:
+        stock_quantity = int(data.get('stock_quantity', 0))
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Stok miktarı geçerli bir tam sayı olmalıdır'}), 400
+    if stock_quantity < 0:
+        return jsonify({'error': 'Stok miktarı negatif olamaz'}), 400
+
+    cost_price = float(data.get('cost_price') or 0)
+    packaging_cost = float(data.get('packaging_cost') or 0)
+    commission = float(data.get('commission') or 0)
+    other_costs = float(data.get('other_costs') or 0)
+    low_stock_threshold = int(data.get('low_stock_threshold', 10))
+    category_id = data.get('category_id')
+    barcode = data.get('barcode')
+    image_url = data.get('image_url')
+    is_active = data.get('is_active', True)
+    description = data.get('description')
+
     conn = get_db()
     cursor = conn.cursor()
+
+    category_name = None
+    if category_id:
+        cursor.execute('SELECT name FROM categories WHERE id = ? AND deleted_at IS NULL', (category_id,))
+        row = cursor.fetchone()
+        if row:
+            category_name = row['name']
+
+    provided_sku = data.get('sku')
+    if provided_sku:
+        provided_sku = str(provided_sku).strip().upper()
+        if sku_exists(provided_sku):
+            conn.close()
+            return jsonify({'error': f'SKU {provided_sku} zaten kullanımda'}), 400
+        sku = provided_sku
+    else:
+        sku = generate_sku(name, category=category_name)
+
+    product_id = str(uuid.uuid4())
     cursor.execute('''
-        INSERT INTO products (id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        product_id,
-        name,
-        data.get('description'),
-        price,
-        data.get('cost_price'),
-        stock_quantity,
-        data.get('category_id'),
-        data.get('sku'),
-        data.get('barcode'),
-        data.get('image_url'),
-        data.get('is_active', True)
-    ))
+        INSERT INTO products (id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (product_id, name, description, price, cost_price, stock_quantity, category_id, sku, barcode, image_url, is_active, low_stock_threshold, packaging_cost, commission, other_costs))
+
+    if stock_quantity > 0:
+        _insert_stock_movement(cursor, product_id, stock_quantity, 'initial', notes='İlk stok girişi')
+
+    cursor.execute('INSERT INTO sku_registry (sku, entity_type, entity_id) VALUES (?, ?, ?)', (sku, 'product', product_id))
     conn.commit()
     conn.close()
-    
-    return jsonify({
+
+    log_activity('create', 'product', product_id, {'name': name, 'sku': sku, 'stock_quantity': stock_quantity})
+
+    result = {
         'id': product_id,
         'name': name,
-        'description': data.get('description'),
+        'description': description,
         'price': price,
-        'cost_price': data.get('cost_price'),
+        'cost_price': cost_price,
         'stock_quantity': stock_quantity,
-        'category_id': data.get('category_id'),
-        'sku': data.get('sku'),
-        'barcode': data.get('barcode'),
-        'image_url': data.get('image_url'),
-        'is_active': data.get('is_active', True)
-    }), 201
+        'category_id': category_id,
+        'sku': sku,
+        'barcode': barcode,
+        'image_url': image_url,
+        'is_active': is_active,
+        'low_stock_threshold': low_stock_threshold,
+        'packaging_cost': packaging_cost,
+        'commission': commission,
+        'other_costs': other_costs,
+        'profit': round(price - (cost_price + packaging_cost + commission + other_costs), 2)
+    }
+    return jsonify(result), 201
 
 @app.route('/api/products/<id>', methods=['PUT'])
 def update_product(id):
-    data = request.json
+    data = request.json or {}
     conn = get_db()
     cursor = conn.cursor()
+
+    cursor.execute('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL', (id,))
+    product = cursor.fetchone()
+    if not product:
+        conn.close()
+        return jsonify({'error': 'Ürün bulunamadı'}), 404
+
+    name = data.get('name', product['name'])
+    price = data.get('price', product['price'])
+    try:
+        price = float(price)
+        if price < 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        conn.close()
+        return jsonify({'error': 'Fiyat geçerli bir pozitif sayı olmalıdır'}), 400
+
+    try:
+        stock_quantity = int(data.get('stock_quantity', product['stock_quantity']))
+    except (ValueError, TypeError):
+        conn.close()
+        return jsonify({'error': 'Stok miktarı geçerli bir tam sayı olmalıdır'}), 400
+    if stock_quantity < 0:
+        conn.close()
+        return jsonify({'error': 'Stok miktarı negatif olamaz'}), 400
+
+    product = _as_dict(product)
+    old_stock = int(product.get('stock_quantity') or 0)
+    stock_diff = stock_quantity - old_stock
+
+    cost_price = float(data.get('cost_price', product.get('cost_price')) or 0)
+    packaging_cost = float(data.get('packaging_cost', product.get('packaging_cost')) or 0)
+    commission = float(data.get('commission', product.get('commission')) or 0)
+    other_costs = float(data.get('other_costs', product.get('other_costs')) or 0)
+    low_stock_threshold = int(data.get('low_stock_threshold', product.get('low_stock_threshold')) or 10)
+
+    old_sku = product['sku']
+    new_sku = data.get('sku', old_sku)
+    if new_sku:
+        new_sku = str(new_sku).strip().upper()
+    if new_sku and new_sku != old_sku:
+        if sku_exists(new_sku):
+            conn.close()
+            return jsonify({'error': f'SKU {new_sku} zaten kullanımda'}), 400
+        cursor.execute('UPDATE sku_registry SET deleted_at = CURRENT_TIMESTAMP WHERE sku = ?', (old_sku,))
+        cursor.execute('INSERT INTO sku_registry (sku, entity_type, entity_id) VALUES (?, ?, ?)', (new_sku, 'product', id))
+    sku = new_sku or old_sku
+
     cursor.execute('''
         UPDATE products SET name = ?, description = ?, price = ?, cost_price = ?, stock_quantity = ?,
-        category_id = ?, sku = ?, barcode = ?, image_url = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+        category_id = ?, sku = ?, barcode = ?, image_url = ?, is_active = ?, low_stock_threshold = ?,
+        packaging_cost = ?, commission = ?, other_costs = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
     ''', (
-        data.get('name'),
-        data.get('description'),
-        data.get('price'),
-        data.get('cost_price'),
-        data.get('stock_quantity'),
-        data.get('category_id'),
-        data.get('sku'),
-        data.get('barcode'),
-        data.get('image_url'),
-        data.get('is_active', True),
-        id
+        name, data.get('description', product['description']), price, cost_price, stock_quantity,
+        data.get('category_id', product['category_id']), sku,
+        data.get('barcode', product['barcode']), data.get('image_url', product['image_url']),
+        data.get('is_active', product.get('is_active', 1)), low_stock_threshold,
+        packaging_cost, commission, other_costs, id
     ))
+
+    if stock_diff != 0:
+        _insert_stock_movement(cursor, id, stock_diff, 'adjustment', notes='Stok güncelleme')
+
     conn.commit()
     conn.close()
-    
+
+    log_activity('update', 'product', id, {'name': name, 'sku': sku, 'stock_quantity': stock_quantity})
     return jsonify({'message': 'Ürün güncellendi'})
 
 @app.route('/api/products/<id>', methods=['DELETE'])
 def delete_product(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM products WHERE id = ?', (id,))
+    cursor.execute('SELECT sku FROM products WHERE id = ? AND deleted_at IS NULL', (id,))
+    product = cursor.fetchone()
+    if not product:
+        conn.close()
+        return jsonify({'error': 'Ürün bulunamadı'}), 404
+
+    cursor.execute('UPDATE products SET deleted_at = CURRENT_TIMESTAMP, is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    cursor.execute('UPDATE sku_registry SET deleted_at = CURRENT_TIMESTAMP WHERE sku = ?', (product['sku'],))
     conn.commit()
     conn.close()
-    
+
+    log_activity('delete', 'product', id, {})
     return jsonify({'message': 'Ürün silindi'})
 
 # Customer routes
 @app.route('/api/customers', methods=['GET'])
 def get_customers():
     search = request.args.get('search', '')
-    
+
     conn = get_db()
     cursor = conn.cursor()
-    
-    query = 'SELECT * FROM customers'
+
+    query = 'SELECT * FROM customers WHERE deleted_at IS NULL'
     params = []
-    
+
     if search:
-        query += ' WHERE name LIKE ? OR email LIKE ? OR phone LIKE ?'
+        query += ' AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)'
         search_pattern = f'%{search}%'
         params.extend([search_pattern, search_pattern, search_pattern])
-    
+
     query += ' ORDER BY created_at DESC'
-    
+
     cursor.execute(query, params)
     customers = cursor.fetchall()
     conn.close()
-    
+
     return jsonify([dict(c) for c in customers])
 
 @app.route('/api/customers', methods=['POST'])
 def create_customer():
-    data = request.json
+    data = request.json or {}
     name = data.get('name')
-    
+
     if not name:
         return jsonify({'error': 'Müşteri adı gerekli'}), 400
-    
+
     customer_id = str(uuid.uuid4())
     conn = get_db()
     cursor = conn.cursor()
@@ -851,7 +1255,8 @@ def create_customer():
     ))
     conn.commit()
     conn.close()
-    
+
+    log_activity('create', 'customer', customer_id, {'name': name})
     return jsonify({
         'id': customer_id,
         'name': name,
@@ -865,15 +1270,19 @@ def create_customer():
 
 @app.route('/api/customers/<id>', methods=['PUT'])
 def update_customer(id):
-    data = request.json
+    data = request.json or {}
+    name = data.get('name')
+    if not name:
+        return jsonify({'error': 'Müşteri adı gerekli'}), 400
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
         UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, city = ?,
         tax_number = ?, tax_office = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        WHERE id = ? AND deleted_at IS NULL
     ''', (
-        data.get('name'),
+        name,
         data.get('email'),
         data.get('phone'),
         data.get('address'),
@@ -882,19 +1291,27 @@ def update_customer(id):
         data.get('tax_office'),
         id
     ))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Müşteri bulunamadı'}), 404
     conn.commit()
     conn.close()
-    
+
+    log_activity('update', 'customer', id, {'name': name})
     return jsonify({'message': 'Müşteri güncellendi'})
 
 @app.route('/api/customers/<id>', methods=['DELETE'])
 def delete_customer(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM customers WHERE id = ?', (id,))
+    cursor.execute('UPDATE customers SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Müşteri bulunamadı'}), 404
     conn.commit()
     conn.close()
-    
+
+    log_activity('delete', 'customer', id, {})
     return jsonify({'message': 'Müşteri silindi'})
 
 # Order routes
@@ -902,70 +1319,81 @@ def delete_customer(id):
 def get_orders():
     status = request.args.get('status')
     customer_id = request.args.get('customer_id')
+    search = request.args.get('search', '')
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 20))
     offset = (page - 1) * limit
-    
+
     conn = get_db()
     cursor = conn.cursor()
-    
+
     query = '''
         SELECT o.*, c.name as customer_name
         FROM orders o
         LEFT JOIN customers c ON o.customer_id = c.id
-        WHERE 1=1
+        WHERE o.deleted_at IS NULL
     '''
     params = []
-    
+
     if status:
         query += ' AND o.status = ?'
         params.append(status)
-    
+
     if customer_id:
         query += ' AND o.customer_id = ?'
         params.append(customer_id)
-    
+
     if start_date:
         query += ' AND o.created_at >= ?'
         params.append(start_date)
-    
+
     if end_date:
         query += ' AND o.created_at <= ?'
         params.append(end_date)
-    
+
+    if search:
+        query += ' AND (o.order_number LIKE ? OR c.name LIKE ?)'
+        search_pattern = f'%{search}%'
+        params.extend([search_pattern, search_pattern])
+
     query += ' ORDER BY o.created_at DESC LIMIT ? OFFSET ?'
     params.extend([limit, offset])
-    
+
     cursor.execute(query, params)
     orders = cursor.fetchall()
-    
+
     # Get total count
-    count_query = 'SELECT COUNT(*) as total FROM orders WHERE 1=1'
+    count_query = 'SELECT COUNT(*) as total FROM orders o LEFT JOIN customers c ON o.customer_id = c.id WHERE o.deleted_at IS NULL'
     count_params = []
-    
+
     if status:
-        count_query += ' AND status = ?'
+        count_query += ' AND o.status = ?'
         count_params.append(status)
-    
+
     if customer_id:
-        count_query += ' AND customer_id = ?'
+        count_query += ' AND o.customer_id = ?'
         count_params.append(customer_id)
-    
+
     if start_date:
-        count_query += ' AND created_at >= ?'
+        count_query += ' AND o.created_at >= ?'
         count_params.append(start_date)
-    
+
     if end_date:
-        count_query += ' AND created_at <= ?'
+        count_query += ' AND o.created_at <= ?'
         count_params.append(end_date)
-    
+
+    if search:
+        count_query += ' AND (o.order_number LIKE ? OR c.name LIKE ?)'
+        search_pattern = f'%{search}%'
+        count_params.extend([search_pattern, search_pattern])
+
     cursor.execute(count_query, count_params)
     total = cursor.fetchone()['total']
-    
+
     conn.close()
-    
+
     return jsonify({
         'orders': [dict(o) for o in orders],
         'total': total,
@@ -982,70 +1410,102 @@ def get_order(id):
         SELECT o.*, c.name as customer_name
         FROM orders o
         LEFT JOIN customers c ON o.customer_id = c.id
-        WHERE o.id = ?
+        WHERE o.id = ? AND o.deleted_at IS NULL
     ''', (id,))
     order = cursor.fetchone()
-    
+
     if not order:
         conn.close()
         return jsonify({'error': 'Sipariş bulunamadı'}), 404
-    
+
     cursor.execute('''
-        SELECT oi.*, p.name as product_name
+        SELECT oi.*, p.name as product_name, p.sku as product_sku
         FROM order_items oi
         LEFT JOIN products p ON oi.product_id = p.id
         WHERE oi.order_id = ?
     ''', (id,))
     items = cursor.fetchall()
     conn.close()
-    
+
     order_dict = dict(order)
     order_dict['items'] = [dict(i) for i in items]
-    
+    order_dict['profit'] = calculate_order_profit(order_dict, items)
     return jsonify(order_dict)
 
 @app.route('/api/orders', methods=['POST'])
 def create_order():
-    data = request.json
+    data = request.json or {}
     customer_id = data.get('customer_id')
     items = data.get('items', [])
     notes = data.get('notes')
-    tax = data.get('tax', 0)
-    shipping_cost = data.get('shipping_cost', 0)
-    discount = data.get('discount', 0)
-    
+    tax = float(data.get('tax') or 0)
+    shipping_cost = float(data.get('shipping_cost') or 0)
+    discount = float(data.get('discount') or 0)
+
     if not customer_id or not items:
         return jsonify({'error': 'Müşteri ve en az bir ürün gerekli'}), 400
-    
-    # Calculate totals
-    subtotal = sum(item['unit_price'] * item['quantity'] for item in items)
-    total = subtotal + tax + shipping_cost - discount
-    
-    order_id = str(uuid.uuid4())
-    order_number = f'ORD-{int(datetime.now().timestamp())}'
-    
+
     conn = get_db()
     cursor = conn.cursor()
+
+    # Validate items and stock
+    subtotal = 0
+    for item in items:
+        product_id = item.get('product_id')
+        qty = item.get('quantity')
+        unit_price = item.get('unit_price')
+        if not product_id or not qty or unit_price is None:
+            conn.close()
+            return jsonify({'error': 'Ürün, miktar ve fiyat zorunludur'}), 400
+        try:
+            qty = int(qty)
+            unit_price = float(unit_price)
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({'error': 'Geçersiz miktar veya fiyat'}), 400
+        if qty <= 0 or unit_price < 0:
+            conn.close()
+            return jsonify({'error': 'Miktar ve fiyat pozitif olmalıdır'}), 400
+
+        cursor.execute('SELECT stock_quantity, name FROM products WHERE id = ? AND deleted_at IS NULL', (product_id,))
+        product = cursor.fetchone()
+        if not product:
+            conn.close()
+            return jsonify({'error': f'Ürün bulunamadı: {product_id}'}), 400
+        if int(product['stock_quantity'] or 0) < qty:
+            conn.close()
+            return jsonify({'error': f'Yetersiz stok: {product["name"]} (mevcut: {product["stock_quantity"]}, istenen: {qty})'}), 400
+        subtotal += unit_price * qty
+
+    total = subtotal + tax + shipping_cost - discount
+    order_id = str(uuid.uuid4())
+    order_number = f'ORD-{int(datetime.now().timestamp())}'
+
     cursor.execute('''
-        INSERT INTO orders (id, customer_id, order_number, status, subtotal, tax, shipping_cost, discount, total, notes)
-        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+        INSERT INTO orders (id, customer_id, order_number, status, subtotal, tax, shipping_cost, discount, total, notes, shipping_status)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, 'pending')
     ''', (order_id, customer_id, order_number, subtotal, tax, shipping_cost, discount, total, notes))
-    
-    # Insert order items
+
     for item in items:
         order_item_id = str(uuid.uuid4())
-        total_price = item['unit_price'] * item['quantity']
+        product_id = item['product_id']
+        qty = int(item['quantity'])
+        unit_price = float(item['unit_price'])
+        total_price = round(unit_price * qty, 2)
         cursor.execute('''
             INSERT INTO order_items (id, order_id, product_id, quantity, unit_price, total_price)
             VALUES (?, ?, ?, ?, ?, ?)
-        ''', (order_item_id, order_id, item['product_id'], item['quantity'], item['unit_price'], total_price))
-        
-        # Update product stock
-        cursor.execute('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?', (item['quantity'], item['product_id']))
-    
+        ''', (order_item_id, order_id, product_id, qty, unit_price, total_price))
+
+        cursor.execute('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?', (qty, product_id))
+        _insert_stock_movement(cursor, product_id, -qty, 'sale', reference_id=order_id, reference_type='order', notes='Satış')
+
     conn.commit()
     conn.close()
-    
+
+    profit = calculate_order_profit({'total': total, 'shipping_cost': shipping_cost, 'discount': discount}, items)
+    log_activity('create', 'order', order_id, {'order_number': order_number, 'total': total})
+
     return jsonify({
         'id': order_id,
         'order_number': order_number,
@@ -1055,19 +1515,56 @@ def create_order():
         'shipping_cost': shipping_cost,
         'discount': discount,
         'total': total,
+        'profit': profit,
         'notes': notes,
         'status': 'pending'
     }), 201
 
 @app.route('/api/orders/<id>', methods=['PUT'])
 def update_order(id):
-    data = request.json
+    data = request.json or {}
     status = data.get('status')
     notes = data.get('notes')
-    
-    if status is None and notes is None:
-        return jsonify({'error': 'Güncellenecek durum veya not gönderilmeli'}), 400
-    
+    tracking_number = data.get('tracking_number')
+    shipping_company = data.get('shipping_company')
+    shipping_status = data.get('shipping_status')
+
+    if status is None and notes is None and tracking_number is None and shipping_company is None and shipping_status is None:
+        return jsonify({'error': 'Güncellenecek alan gönderilmeli'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL', (id,))
+    order = cursor.fetchone()
+    if not order:
+        conn.close()
+        return jsonify({'error': 'Sipariş bulunamadı'}), 404
+
+    cursor.execute('SELECT * FROM order_items WHERE order_id = ?', (id,))
+    items = cursor.fetchall()
+
+    old_status = order['status']
+    new_status = status if status is not None else old_status
+
+    # Handle stock changes on status transitions
+    if status is not None and old_status != new_status:
+        if old_status != 'cancelled' and new_status == 'cancelled':
+            for item in items:
+                qty = int(item['quantity'])
+                cursor.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', (qty, item['product_id']))
+                _insert_stock_movement(cursor, item['product_id'], qty, 'return', reference_id=id, reference_type='order', notes='Sipariş iptal - stok iadesi')
+        elif old_status == 'cancelled' and new_status != 'cancelled':
+            for item in items:
+                qty = int(item['quantity'])
+                cursor.execute('SELECT stock_quantity FROM products WHERE id = ? AND deleted_at IS NULL', (item['product_id'],))
+                prod = cursor.fetchone()
+                if not prod or int(prod['stock_quantity'] or 0) < qty:
+                    conn.close()
+                    return jsonify({'error': 'Stok yetersiz, sipariş aktif edilemiyor'}), 400
+                cursor.execute('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?', (qty, item['product_id']))
+                _insert_stock_movement(cursor, item['product_id'], -qty, 'sale', reference_id=id, reference_type='order', notes='Sipariş aktif - stok düşümü')
+
     fields = []
     params = []
     if status is not None:
@@ -1076,27 +1573,51 @@ def update_order(id):
     if notes is not None:
         fields.append('notes = ?')
         params.append(notes)
-    
-    params.append(id)
-    query = f"UPDATE orders SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(query, tuple(params))
+    if tracking_number is not None:
+        fields.append('tracking_number = ?')
+        params.append(tracking_number)
+    if shipping_company is not None:
+        fields.append('shipping_company = ?')
+        params.append(shipping_company)
+    if shipping_status is not None:
+        fields.append('shipping_status = ?')
+        params.append(shipping_status)
+
+    if fields:
+        params.append(id)
+        query = f"UPDATE orders SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        cursor.execute(query, tuple(params))
+
     conn.commit()
     conn.close()
-    
+
+    log_activity('update', 'order', id, {'status': new_status, 'notes': notes, 'tracking_number': tracking_number, 'shipping_company': shipping_company})
     return jsonify({'message': 'Sipariş güncellendi'})
 
 @app.route('/api/orders/<id>', methods=['DELETE'])
 def delete_order(id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM order_items WHERE order_id = ?', (id,))
-    cursor.execute('DELETE FROM orders WHERE id = ?', (id,))
+
+    cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL', (id,))
+    order = cursor.fetchone()
+    if not order:
+        conn.close()
+        return jsonify({'error': 'Sipariş bulunamadı'}), 404
+
+    if order['status'] != 'cancelled':
+        cursor.execute('SELECT * FROM order_items WHERE order_id = ?', (id,))
+        items = cursor.fetchall()
+        for item in items:
+            qty = int(item['quantity'])
+            cursor.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', (qty, item['product_id']))
+            _insert_stock_movement(cursor, item['product_id'], qty, 'return', reference_id=id, reference_type='order', notes='Sipariş silinme - stok iadesi')
+
+    cursor.execute('UPDATE orders SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
     conn.commit()
     conn.close()
-    
+
+    log_activity('delete', 'order', id, {})
     return jsonify({'message': 'Sipariş silindi'})
 
 # Dashboard routes
@@ -1104,31 +1625,123 @@ def delete_order(id):
 def get_dashboard_stats():
     conn = get_db()
     cursor = conn.cursor()
-    
+
     stats = {}
-    
-    cursor.execute('SELECT COUNT(*) as total FROM products WHERE is_active = 1')
+
+    cursor.execute('SELECT COUNT(*) as total FROM products WHERE deleted_at IS NULL AND is_active = 1')
     stats['total_products'] = cursor.fetchone()['total']
-    
-    cursor.execute('SELECT COUNT(*) as total FROM customers')
+
+    cursor.execute('SELECT COUNT(*) as total FROM customers WHERE deleted_at IS NULL')
     stats['total_customers'] = cursor.fetchone()['total']
-    
-    cursor.execute('SELECT COUNT(*) as total FROM orders')
-    stats['total_orders'] = cursor.fetchone()['total']
-    
-    cursor.execute("SELECT SUM(total) as total FROM orders WHERE status = 'completed'")
-    result = cursor.fetchone()
-    stats['total_revenue'] = result['total'] or 0
-    
-    cursor.execute("SELECT COUNT(*) as total FROM orders WHERE status = 'pending'")
+
+    cursor.execute("SELECT COUNT(*) as total FROM orders WHERE deleted_at IS NULL AND status = 'pending'")
     stats['pending_orders'] = cursor.fetchone()['total']
-    
-    cursor.execute('SELECT SUM(stock_quantity) as total FROM products WHERE stock_quantity < 10')
-    result = cursor.fetchone()
-    stats['low_stock'] = result['total'] or 0
-    
+
+    cursor.execute('SELECT COUNT(*) as total FROM products WHERE deleted_at IS NULL AND stock_quantity <= 0')
+    stats['out_of_stock'] = cursor.fetchone()['total']
+
+    cursor.execute('''
+        SELECT COUNT(*) as total, COALESCE(SUM(stock_quantity * cost_price), 0) as value
+        FROM products
+        WHERE deleted_at IS NULL
+    ''')
+    row = cursor.fetchone()
+    stats['stock_value'] = round(float(row['value'] or 0), 2)
+
+    cursor.execute('''
+        SELECT COUNT(*) as total FROM products
+        WHERE deleted_at IS NULL
+        AND stock_quantity > 0
+        AND stock_quantity <= COALESCE(low_stock_threshold, 10)
+    ''')
+    stats['low_stock_count'] = cursor.fetchone()['total']
+
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
+    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
+
+    cursor.execute('''
+        SELECT id, total, shipping_cost, discount, status, created_at
+        FROM orders
+        WHERE deleted_at IS NULL AND status != 'cancelled'
+    ''')
+    orders = cursor.fetchall()
+
+    if orders:
+        order_ids = tuple(o['id'] for o in orders)
+        placeholders = ','.join('?' * len(order_ids))
+        cursor.execute(f'''
+            SELECT oi.order_id, oi.quantity, p.cost_price, p.packaging_cost, p.commission, p.other_costs
+            FROM order_items oi
+            JOIN products p ON p.id = oi.product_id
+            WHERE oi.order_id IN ({placeholders})
+        ''', order_ids)
+        items = cursor.fetchall()
+    else:
+        items = []
+
+    items_map = {}
+    for item in items:
+        items_map.setdefault(item['order_id'], []).append(item)
+
+    metrics = {
+        'today_sales': 0,
+        'monthly_sales': 0,
+        'total_sales': 0,
+        'total_orders': 0,
+        'total_revenue': 0,
+        'net_profit': 0,
+        'total_expenses': 0,
+    }
+
+    for o in orders:
+        total = float(o['total'] or 0)
+        shipping = float(o['shipping_cost'] or 0)
+        discount = float(o['discount'] or 0)
+        cost = 0
+        for item in items_map.get(o['id'], []):
+            item_cost = sum(float(item[k] or 0) for k in ['cost_price', 'packaging_cost', 'commission', 'other_costs'])
+            cost += item_cost * int(item['quantity'])
+        profit = round(total - cost - shipping - discount, 2)
+
+        metrics['total_sales'] += 1
+        metrics['total_revenue'] = round(metrics['total_revenue'] + total, 2)
+        metrics['net_profit'] = round(metrics['net_profit'] + profit, 2)
+        metrics['total_expenses'] = round(metrics['total_expenses'] + cost + shipping + discount, 2)
+
+        created_str = str(o['created_at'])[:19]
+        if created_str >= today_start:
+            metrics['today_sales'] = round(metrics['today_sales'] + total, 2)
+        if created_str >= month_start:
+            metrics['monthly_sales'] = round(metrics['monthly_sales'] + total, 2)
+
+    stats.update(metrics)
+
+    # Top selling products
+    cursor.execute('''
+        SELECT oi.product_id, p.name, SUM(oi.quantity) as total_qty, SUM(oi.total_price) as total_revenue
+        FROM order_items oi
+        JOIN products p ON p.id = oi.product_id
+        JOIN orders o ON o.id = oi.order_id
+        WHERE o.deleted_at IS NULL AND o.status != 'cancelled'
+        GROUP BY oi.product_id, p.name
+        ORDER BY total_qty DESC
+        LIMIT 5
+    ''')
+    stats['top_products'] = [dict(r) for r in cursor.fetchall()]
+
+    # Low stock products
+    cursor.execute('''
+        SELECT id, name, stock_quantity, low_stock_threshold
+        FROM products
+        WHERE deleted_at IS NULL
+        AND stock_quantity > 0
+        AND stock_quantity <= COALESCE(low_stock_threshold, 10)
+        ORDER BY stock_quantity ASC
+        LIMIT 5
+    ''')
+    stats['low_stock_products'] = [dict(r) for r in cursor.fetchall()]
+
     conn.close()
-    
     return jsonify(stats)
 
 @app.route('/api/dashboard/recent-orders', methods=['GET'])
@@ -1139,32 +1752,33 @@ def get_recent_orders():
         SELECT o.*, c.name as customer_name
         FROM orders o
         LEFT JOIN customers c ON o.customer_id = c.id
+        WHERE o.deleted_at IS NULL
         ORDER BY o.created_at DESC
         LIMIT 10
     ''')
     orders = cursor.fetchall()
     conn.close()
-    
+
     return jsonify([dict(o) for o in orders])
 
 @app.route('/api/dashboard/sales-chart', methods=['GET'])
 def get_sales_chart():
     days = int(request.args.get('days', 30))
     start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
-    
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT DATE(created_at) as date, SUM(total) as total, COUNT(*) as count
         FROM orders
-        WHERE status = 'completed'
+        WHERE deleted_at IS NULL AND status != 'cancelled'
         AND created_at >= ?
         GROUP BY DATE(created_at)
         ORDER BY date
     ''', (start_date,))
     sales = cursor.fetchall()
     conn.close()
-    
+
     return jsonify([dict(s) for s in sales])
 
 # Settings routes
@@ -1259,48 +1873,60 @@ def get_stock_movements():
 
 @app.route('/api/stock-movements', methods=['POST'])
 def create_stock_movement():
-    data = request.json
+    data = request.json or {}
     product_id = data.get('product_id')
     movement_type = data.get('movement_type')
     quantity = data.get('quantity')
-    
-    if not product_id or not movement_type or not quantity:
-        return jsonify({'error': 'Gerekli alanlar eksik'}), 400
-    
-    movement_id = str(uuid.uuid4())
-    user_id = request.headers.get('X-User-ID', 'admin')
-    
+
+    if not product_id or not movement_type or quantity is None:
+        return jsonify({'error': 'Ürün, hareket tipi ve miktar gerekli'}), 400
+
+    try:
+        quantity = int(quantity)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Miktar geçerli bir tam sayı olmalıdır'}), 400
+
+    if movement_type not in ('in', 'out', 'adjustment'):
+        return jsonify({'error': 'Geçersiz hareket tipi'}), 400
+
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Create stock movement record
-    cursor.execute('''
-        INSERT INTO stock_movements (id, product_id, movement_type, quantity, reference_id, reference_type, notes, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        movement_id,
-        product_id,
-        movement_type,
-        quantity,
-        data.get('reference_id'),
-        data.get('reference_type'),
-        data.get('notes'),
-        user_id
-    ))
-    
-    # Update product stock
+
+    cursor.execute('SELECT stock_quantity FROM products WHERE id = ? AND deleted_at IS NULL', (product_id,))
+    product = cursor.fetchone()
+    if not product:
+        conn.close()
+        return jsonify({'error': 'Ürün bulunamadı'}), 404
+
     if movement_type == 'in':
-        cursor.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', (quantity, product_id))
+        if quantity <= 0:
+            conn.close()
+            return jsonify({'error': 'Giriş miktarı pozitif olmalıdır'}), 400
+        new_stock = int(product['stock_quantity'] or 0) + quantity
+        cursor.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (new_stock, product_id))
+        _insert_stock_movement(cursor, product_id, quantity, 'in', reference_id=data.get('reference_id'), reference_type=data.get('reference_type'), notes=data.get('notes'))
     elif movement_type == 'out':
-        cursor.execute('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?', (quantity, product_id))
+        if quantity <= 0:
+            conn.close()
+            return jsonify({'error': 'Çıkış miktarı pozitif olmalıdır'}), 400
+        current = int(product['stock_quantity'] or 0)
+        if current < quantity:
+            conn.close()
+            return jsonify({'error': 'Yetersiz stok'}), 400
+        new_stock = current - quantity
+        cursor.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (new_stock, product_id))
+        _insert_stock_movement(cursor, product_id, -quantity, 'out', reference_id=data.get('reference_id'), reference_type=data.get('reference_type'), notes=data.get('notes'))
     elif movement_type == 'adjustment':
-        cursor.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (quantity, product_id))
-    
+        new_stock = quantity
+        cursor.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (new_stock, product_id))
+        diff = new_stock - int(product['stock_quantity'] or 0)
+        _insert_stock_movement(cursor, product_id, diff, 'adjustment', reference_id=data.get('reference_id'), reference_type=data.get('reference_type'), notes=data.get('notes'))
+
     conn.commit()
     conn.close()
-    
+
+    log_activity('create', 'stock_movement', product_id, {'movement_type': movement_type, 'quantity': quantity})
     return jsonify({
-        'id': movement_id,
         'product_id': product_id,
         'movement_type': movement_type,
         'quantity': quantity,
@@ -1457,56 +2083,73 @@ def get_returns():
 
 @app.route('/api/returns', methods=['POST'])
 def create_return():
-    data = request.json
+    data = request.json or {}
     order_id = data.get('order_id')
     return_type = data.get('return_type')
     items = data.get('items', [])
-    
+
     if not order_id or not return_type or not items:
-        return jsonify({'error': 'Gerekli alanlar eksik'}), 400
-    
-    return_id = str(uuid.uuid4())
+        return jsonify({'error': 'Sipariş, iade tipi ve en az bir ürün gerekli'}), 400
+
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Create return record
+
+    cursor.execute('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL', (order_id,))
+    order = cursor.fetchone()
+    if not order:
+        conn.close()
+        return jsonify({'error': 'Sipariş bulunamadı'}), 404
+
+    cursor.execute('SELECT * FROM order_items WHERE order_id = ?', (order_id,))
+    order_items = {oi['product_id']: int(oi['quantity']) for oi in cursor.fetchall()}
+
+    return_id = str(uuid.uuid4())
     cursor.execute('''
-        INSERT INTO returns (id, order_id, customer_id, return_type, reason, refund_amount, refund_method, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO returns (id, order_id, customer_id, return_type, reason, refund_amount, refund_method, notes, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
     ''', (
         return_id,
         order_id,
-        data.get('customer_id'),
+        order['customer_id'],
         return_type,
         data.get('reason'),
-        data.get('refund_amount'),
+        float(data.get('refund_amount') or 0),
         data.get('refund_method'),
         data.get('notes')
     ))
-    
-    # Create return items
+
     for item in items:
+        product_id = item.get('product_id')
+        qty = item.get('quantity')
+        if not product_id or qty is None:
+            conn.close()
+            return jsonify({'error': 'İade ürünü ve miktarı gerekli'}), 400
+        try:
+            qty = int(qty)
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({'error': 'Geçersiz iade miktarı'}), 400
+        if qty <= 0:
+            conn.close()
+            return jsonify({'error': 'İade miktarı pozitif olmalıdır'}), 400
+        if product_id not in order_items or qty > order_items[product_id]:
+            conn.close()
+            return jsonify({'error': f'İade miktarı siparişteki miktarı aşamaz: {product_id}'}), 400
+
         return_item_id = str(uuid.uuid4())
         cursor.execute('''
             INSERT INTO return_items (id, return_id, product_id, quantity, reason, condition)
             VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            return_item_id,
-            return_id,
-            item['product_id'],
-            item['quantity'],
-            item.get('reason'),
-            item.get('condition')
-        ))
-        
-        # Update stock if return is approved
-        if return_type == 'refund':
-            cursor.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', 
-                          (item['quantity'], item['product_id']))
-    
+        ''', (return_item_id, return_id, product_id, qty, item.get('reason'), item.get('condition')))
+
+        # Increase stock and record movement
+        cursor.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', (qty, product_id))
+        _insert_stock_movement(cursor, product_id, qty, 'return', reference_id=return_id, reference_type='return', notes=f'Sipariş {order["order_number"]} iadesi')
+
     conn.commit()
     conn.close()
-    
+
+    log_activity('create', 'return', return_id, {'order_id': order_id, 'return_type': return_type})
     return jsonify({
         'id': return_id,
         'order_id': order_id,
@@ -1516,15 +2159,24 @@ def create_return():
 
 @app.route('/api/returns/<id>', methods=['PUT'])
 def update_return(id):
-    data = request.json
+    data = request.json or {}
     status = data.get('status')
-    
+    if not status:
+        return jsonify({'error': 'Durum gerekli'}), 400
+
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute('SELECT * FROM returns WHERE id = ?', (id,))
+    ret = cursor.fetchone()
+    if not ret:
+        conn.close()
+        return jsonify({'error': 'İade kaydı bulunamadı'}), 404
+
     cursor.execute('UPDATE returns SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (status, id))
     conn.commit()
     conn.close()
-    
+
+    log_activity('update', 'return', id, {'status': status})
     return jsonify({'message': 'İade durumu güncellendi'})
 
 # Coupons routes
@@ -1843,27 +2495,6 @@ def get_activity_logs():
         'limit': limit,
         'totalPages': (total + limit - 1) // limit
     })
-
-def log_activity(user_id, action, entity_type=None, entity_id=None, details=None):
-    """Helper function to log activity"""
-    conn = get_db()
-    cursor = conn.cursor()
-    log_id = str(uuid.uuid4())
-    cursor.execute('''
-        INSERT INTO activity_logs (id, user_id, action, entity_type, entity_id, details, ip_address, user_agent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        log_id,
-        user_id,
-        action,
-        entity_type,
-        entity_id,
-        details,
-        request.remote_addr,
-        request.headers.get('User-Agent', '')
-    ))
-    conn.commit()
-    conn.close()
 
 # Product Variations routes
 @app.route('/api/products/<product_id>/variations', methods=['GET'])
@@ -2533,6 +3164,131 @@ def generate_stock_report_pdf():
     )
 
     return response
+
+# Backup / Restore / Trash routes
+BACKUP_TABLES = [
+    'categories', 'products', 'customers', 'suppliers', 'orders', 'order_items',
+    'returns', 'return_items', 'coupons', 'finance_transactions',
+    'product_variations', 'stock_movements', 'settings'
+]
+
+def _backup_to_dict(conn):
+    cursor = conn.cursor()
+    backup = {}
+    for table in BACKUP_TABLES:
+        cursor.execute(f'SELECT * FROM {table}')
+        backup[table] = [_serialize_row(r) for r in cursor.fetchall()]
+    cursor.execute('SELECT id, username, email, full_name, role, theme, language, created_at, updated_at FROM users')
+    backup['users'] = [_serialize_row(r) for r in cursor.fetchall()]
+    return backup
+
+def _write_local_backup(backup):
+    filename = f'backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+    path = os.path.join(BACKUP_DIR, filename)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(backup, f, ensure_ascii=False, indent=2, default=str)
+    return filename
+
+@app.route('/api/backup', methods=['GET'])
+@admin_required
+def export_backup():
+    conn = get_db()
+    backup = _backup_to_dict(conn)
+    conn.close()
+    backup['exported_at'] = datetime.now().isoformat()
+
+    if request.args.get('download') == '1':
+        output = io.BytesIO(json.dumps(backup, ensure_ascii=False, indent=2, default=str).encode('utf-8'))
+        return app.response_class(
+            output.getvalue(),
+            mimetype='application/json',
+            headers={'Content-Disposition': f'attachment; filename=backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'}
+        )
+
+    return jsonify(backup)
+
+@app.route('/api/backup', methods=['POST'])
+@admin_required
+def create_local_backup():
+    conn = get_db()
+    backup = _backup_to_dict(conn)
+    conn.close()
+    backup['exported_at'] = datetime.now().isoformat()
+    filename = _write_local_backup(backup)
+    log_activity('backup', 'system', '', {'filename': filename})
+    return jsonify({'message': 'Yedek oluşturuldu', 'filename': filename})
+
+@app.route('/api/backup/restore', methods=['POST'])
+@admin_required
+def restore_backup():
+    data = request.json or {}
+    tables = data.get('tables')
+    if not isinstance(tables, dict):
+        return jsonify({'error': 'Geri yüklenecek tablolar gerekli'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        for table, rows in tables.items():
+            if not rows:
+                continue
+            if table == 'settings':
+                for row in rows:
+                    cursor.execute('''
+                        INSERT INTO settings (key, value, updated_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
+                    ''', (row.get('key'), row.get('value')))
+            elif table == 'users':
+                continue  # Do not overwrite users or passwords
+            else:
+                _upsert_table(cursor, table, rows)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': f'Geri yükleme hatası: {str(e)}'}), 400
+    conn.close()
+
+    log_activity('restore', 'backup', '', {'tables': list(tables.keys())})
+    return jsonify({'message': 'Yedek başarıyla geri yüklendi'})
+
+@app.route('/api/backup/list', methods=['GET'])
+@admin_required
+def list_backups():
+    files = [f for f in os.listdir(BACKUP_DIR) if f.endswith('.json')]
+    files.sort(reverse=True)
+    return jsonify(files)
+
+@app.route('/api/trash', methods=['GET'])
+@admin_required
+def get_trash():
+    conn = get_db()
+    cursor = conn.cursor()
+    result = {}
+    for table, name_col in [('products', 'name'), ('customers', 'name'), ('categories', 'name'), ('orders', 'order_number')]:
+        cursor.execute(f'SELECT id, {name_col} as name, deleted_at FROM {table} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC')
+        result[table] = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(result)
+
+@app.route('/api/trash/<entity>/<id>/restore', methods=['POST'])
+@admin_required
+def restore_trash_item(entity, id):
+    if entity not in ('products', 'customers', 'categories', 'orders'):
+        return jsonify({'error': 'Geçersiz varlık tipi'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(f'UPDATE {entity} SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (id,))
+    if cursor.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Öğe bulunamadı'}), 404
+    conn.commit()
+    conn.close()
+
+    log_activity('restore', entity, id, {})
+    return jsonify({'message': 'Öğe çöp kutusundan geri yüklendi'})
 
 # Initialize database at startup
 init_db()

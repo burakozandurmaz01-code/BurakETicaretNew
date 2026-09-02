@@ -169,8 +169,11 @@ function updateDashboardStats(stats) {
     document.getElementById('total-customers').textContent = stats.total_customers || 0;
     document.getElementById('total-orders').textContent = stats.total_orders || 0;
     document.getElementById('total-revenue').textContent = `₺${(stats.total_revenue || 0).toFixed(2)}`;
+    document.getElementById('net-profit').textContent = `₺${(stats.net_profit || 0).toFixed(2)}`;
+    document.getElementById('stock-value').textContent = `₺${(stats.stock_value || 0).toFixed(2)}`;
     document.getElementById('pending-orders').textContent = stats.pending_orders || 0;
-    document.getElementById('low-stock').textContent = stats.low_stock || 0;
+    document.getElementById('low-stock').textContent = stats.low_stock_count || 0;
+    document.getElementById('out-of-stock').textContent = stats.out_of_stock || 0;
 }
 
 function updateRecentOrdersTable(orders) {
@@ -242,19 +245,33 @@ async function loadProducts(page = 1, search = '') {
 
 function updateProductsTable(products) {
     const tbody = document.getElementById('products-table');
-    
+
     if (products.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center">Ürün bulunamadı</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="text-center">Ürün bulunamadı</td></tr>';
         return;
     }
 
-    tbody.innerHTML = products.map(product => `
+    tbody.innerHTML = products.map(product => {
+        let stockBadgeClass = 'success';
+        let stockLabel = 'Yeterli';
+        if (product.is_out_of_stock) {
+            stockBadgeClass = 'danger';
+            stockLabel = 'Tükendi';
+        } else if (product.is_low_stock) {
+            stockBadgeClass = 'warning';
+            stockLabel = 'Düşük';
+        }
+
+        return `
         <tr>
             <td>${product.image_url ? `<img src="${API_BASE_URL}${product.image_url}" alt="${product.name}">` : '<div class="no-image">-</div>'}</td>
             <td>${product.name}</td>
+            <td>${product.sku || '-'}</td>
             <td>${product.category_name || '-'}</td>
             <td>₺${product.price.toFixed(2)}</td>
-            <td>${product.stock_quantity}</td>
+            <td>₺${(product.cost_price || 0).toFixed(2)}</td>
+            <td>₺${(product.profit || 0).toFixed(2)}</td>
+            <td>${product.stock_quantity} <span class="badge badge-${stockBadgeClass}">${stockLabel}</span></td>
             <td><span class="badge badge-${product.is_active ? 'success' : 'secondary'}">${product.is_active ? 'Aktif' : 'Pasif'}</span></td>
             <td>
                 <button class="btn btn-sm btn-icon" onclick="editProduct('${product.id}')">
@@ -265,7 +282,7 @@ function updateProductsTable(products) {
                 </button>
             </td>
         </tr>
-    `).join('');
+    `}).join('');
 }
 
 async function saveProduct(formData) {
@@ -274,26 +291,44 @@ async function saveProduct(formData) {
         const url = productId ? `/products/${productId}` : '/products';
         const method = productId ? 'PUT' : 'POST';
 
+        const price = parseFloat(formData.get('price'));
+        const stock = parseInt(formData.get('stock_quantity'));
+
+        if (!formData.get('name')) {
+            showToast('Ürün adı zorunludur', 'error');
+            return;
+        }
+        if (isNaN(price) || price < 0) {
+            showToast('Fiyat geçerli bir pozitif sayı olmalıdır', 'error');
+            return;
+        }
+        if (isNaN(stock) || stock < 0) {
+            showToast('Stok miktarı geçerli bir tam sayı olmalıdır', 'error');
+            return;
+        }
+
         const productData = {
             name: formData.get('name'),
             description: formData.get('description'),
-            price: parseFloat(formData.get('price')),
-            cost_price: formData.get('cost_price') ? parseFloat(formData.get('cost_price')) : null,
-            stock_quantity: parseInt(formData.get('stock_quantity')),
+            price: price,
+            cost_price: formData.get('cost_price') ? parseFloat(formData.get('cost_price')) : 0,
+            stock_quantity: stock,
+            low_stock_threshold: formData.get('low_stock_threshold') ? parseInt(formData.get('low_stock_threshold')) : 10,
+            packaging_cost: formData.get('packaging_cost') ? parseFloat(formData.get('packaging_cost')) : 0,
+            commission: formData.get('commission') ? parseFloat(formData.get('commission')) : 0,
+            other_costs: formData.get('other_costs') ? parseFloat(formData.get('other_costs')) : 0,
             category_id: formData.get('category_id') || null,
             sku: formData.get('sku') || null,
             barcode: formData.get('barcode') || null,
-            is_active: formData.get('is_active') === 'on'
+            is_active: document.getElementById('product-active').checked
         };
 
-        const response = await apiRequest(url, {
+        const data = await apiRequest(url, {
             method,
             body: JSON.stringify(productData)
         });
 
-        const data = await response;
-
-        if (response.ok) {
+        if (data) {
             // Save variations if this is a new product
             if (!productId) {
                 const variations = collectVariations(data.id);
@@ -316,13 +351,17 @@ async function saveProduct(formData) {
 async function editProduct(productId) {
     try {
         const product = await apiRequest(`/products/${productId}`);
-        
+
         document.getElementById('product-id').value = product.id;
         document.getElementById('product-name').value = product.name;
         document.getElementById('product-description').value = product.description || '';
         document.getElementById('product-price').value = product.price;
         document.getElementById('product-cost').value = product.cost_price || '';
         document.getElementById('product-stock').value = product.stock_quantity;
+        document.getElementById('product-low-stock').value = product.low_stock_threshold || 10;
+        document.getElementById('product-packaging').value = product.packaging_cost || '';
+        document.getElementById('product-commission').value = product.commission || '';
+        document.getElementById('product-other-costs').value = product.other_costs || '';
         document.getElementById('product-category').value = product.category_id || '';
         document.getElementById('product-sku').value = product.sku || '';
         document.getElementById('product-barcode').value = product.barcode || '';
@@ -330,7 +369,7 @@ async function editProduct(productId) {
 
         document.getElementById('product-modal-title').textContent = 'Ürün Düzenle';
         openModal('product-modal');
-        
+
         await loadCategories();
     } catch (error) {
         showToast('Ürün yüklenirken hata', 'error');
@@ -553,34 +592,61 @@ async function saveOrder(formData) {
 async function viewOrderDetail(orderId) {
     try {
         const order = await apiRequest(`/orders/${orderId}`);
-        
+
         // Store order ID for PDF generation
         document.getElementById('print-invoice-btn').dataset.orderId = orderId;
-        
+
         const content = `
             <div class="order-detail-info">
                 <div><strong>Sipariş No:</strong> ${order.order_number}</div>
                 <div><strong>Müşteri:</strong> ${order.customer_name || '-'}</div>
                 <div><strong>Durum:</strong> ${getStatusLabel(order.status)}</div>
+                <div><strong>Kargo Durumu:</strong> ${order.shipping_status || 'Bekliyor'}</div>
                 <div><strong>Tarih:</strong> ${formatDate(order.created_at)}</div>
                 <div><strong>Ara Toplam:</strong> ₺${order.subtotal.toFixed(2)}</div>
                 <div><strong>Vergi:</strong> ₺${order.tax.toFixed(2)}</div>
                 <div><strong>Kargo:</strong> ₺${order.shipping_cost.toFixed(2)}</div>
                 <div><strong>İndirim:</strong> ₺${order.discount.toFixed(2)}</div>
                 <div><strong>Toplam:</strong> ₺${order.total.toFixed(2)}</div>
+                <div><strong>Tahmini Kar:</strong> ₺${(order.profit || 0).toFixed(2)}</div>
                 <div><strong>Notlar:</strong> ${order.notes || '-'}</div>
             </div>
             <div class="order-status-update" style="margin: 15px 0; padding: 15px; border: 1px solid var(--border-color); border-radius: 4px;">
-                <label><strong>Sipariş Durumunu Güncelle</strong></label>
-                <select id="order-detail-status" class="form-control" style="margin: 8px 0; padding: 5px; width: 100%;">
-                    <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Bekliyor</option>
-                    <option value="processing" ${order.status === 'processing' ? 'selected' : ''}>İşleniyor</option>
-                    <option value="shipped" ${order.status === 'shipped' ? 'selected' : ''}>Kargolandı</option>
-                    <option value="delivered" ${order.status === 'delivered' ? 'selected' : ''}>Teslim Edildi</option>
-                    <option value="cancelled" ${order.status === 'cancelled' ? 'selected' : ''}>İptal Edildi</option>
-                </select>
+                <label><strong>Sipariş / Kargo Durumunu Güncelle</strong></label>
+                <div class="form-row" style="margin-top: 8px;">
+                    <div class="form-group">
+                        <label>Sipariş Durumu</label>
+                        <select id="order-detail-status" class="form-control">
+                            <option value="pending" ${order.status === 'pending' ? 'selected' : ''}>Bekliyor</option>
+                            <option value="processing" ${order.status === 'processing' ? 'selected' : ''}>İşleniyor</option>
+                            <option value="shipped" ${order.status === 'shipped' ? 'selected' : ''}>Kargolandı</option>
+                            <option value="delivered" ${order.status === 'delivered' ? 'selected' : ''}>Teslim Edildi</option>
+                            <option value="cancelled" ${order.status === 'cancelled' ? 'selected' : ''}>İptal Edildi</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Kargo Durumu</label>
+                        <select id="order-detail-shipping-status" class="form-control">
+                            <option value="pending" ${order.shipping_status === 'pending' ? 'selected' : ''}>Bekliyor</option>
+                            <option value="shipped" ${order.shipping_status === 'shipped' ? 'selected' : ''}>Kargolandı</option>
+                            <option value="in_transit" ${order.shipping_status === 'in_transit' ? 'selected' : ''}>Dağıtımda</option>
+                            <option value="delivered" ${order.shipping_status === 'delivered' ? 'selected' : ''}>Teslim Edildi</option>
+                            <option value="returned" ${order.shipping_status === 'returned' ? 'selected' : ''}>İade</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Kargo Firması</label>
+                        <input type="text" id="order-detail-shipping-company" class="form-control" value="${order.shipping_company || ''}">
+                    </div>
+                    <div class="form-group">
+                        <label>Takip Numarası</label>
+                        <input type="text" id="order-detail-tracking-number" class="form-control" value="${order.tracking_number || ''}">
+                    </div>
+                </div>
                 <button type="button" class="btn btn-primary" id="update-order-status-btn">
-                    <i class="fas fa-save"></i> Durumu Kaydet
+                    <i class="fas fa-save"></i> Kaydet
                 </button>
             </div>
             <h4>Sipariş Ürünleri</h4>
@@ -596,7 +662,7 @@ async function viewOrderDetail(orderId) {
                 <tbody>
                     ${order.items.map(item => `
                         <tr>
-                            <td>${item.product_name || '-'}</td>
+                            <td>${item.product_name || '-'} <small>${item.product_sku || ''}</small></td>
                             <td>${item.quantity}</td>
                             <td>₺${item.unit_price.toFixed(2)}</td>
                             <td>₺${item.total_price.toFixed(2)}</td>
@@ -610,7 +676,10 @@ async function viewOrderDetail(orderId) {
 
         document.getElementById('update-order-status-btn').addEventListener('click', () => {
             const status = document.getElementById('order-detail-status').value;
-            updateOrderStatus(orderId, status);
+            const shippingStatus = document.getElementById('order-detail-shipping-status').value;
+            const shippingCompany = document.getElementById('order-detail-shipping-company').value;
+            const trackingNumber = document.getElementById('order-detail-tracking-number').value;
+            updateOrderStatus(orderId, { status, shipping_status: shippingStatus, shipping_company: shippingCompany, tracking_number: trackingNumber });
         });
 
         openModal('order-detail-modal');
@@ -619,17 +688,17 @@ async function viewOrderDetail(orderId) {
     }
 }
 
-async function updateOrderStatus(orderId, status) {
+async function updateOrderStatus(orderId, payload) {
     try {
         await apiRequest(`/orders/${orderId}`, {
             method: 'PUT',
-            body: JSON.stringify({ status })
+            body: JSON.stringify(payload)
         });
-        showToast('Sipariş durumu güncellendi', 'success');
+        showToast('Sipariş güncellendi', 'success');
         loadOrders();
         closeModal();
     } catch (error) {
-        showToast('Sipariş durumu güncellenirken hata', 'error');
+        showToast('Sipariş güncellenirken hata', 'error');
     }
 }
 
