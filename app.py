@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import re
+import socket
 import traceback
 from html import escape
 from openpyxl import Workbook
@@ -673,7 +674,7 @@ def require_auth_for_api():
         return None
     if not request.path.startswith('/api/'):
         return None
-    if request.path in ('/api/auth/login', '/api/auth/register'):
+    if request.path in ('/api/auth/login', '/api/auth/register', '/api/network/info'):
         return None
     try:
         verify_jwt_in_request()
@@ -704,6 +705,28 @@ def serve_static(path):
 @app.route('/uploads/<path:path>')
 def serve_uploads(path):
     return send_from_directory('uploads', path)
+
+def get_local_ip():
+    try:
+        addrs = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+        ips = sorted({a[4][0] for a in addrs})
+        for ip in ips:
+            if not ip.startswith('127.'):
+                return ip
+        return ips[0]
+    except Exception:
+        return '127.0.0.1'
+
+@app.route('/api/network/info', methods=['GET'])
+def network_info():
+    port = int(os.environ.get('PORT', 5000))
+    local_ip = get_local_ip()
+    return jsonify({
+        'local_ip': local_ip,
+        'hostname': socket.gethostname(),
+        'port': port,
+        'url': f'http://{local_ip}:{port}'
+    })
 
 # Auth routes
 @app.route('/api/auth/login', methods=['POST'])
