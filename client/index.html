@@ -26,6 +26,10 @@
                         <label for="password">Şifre</label>
                         <input type="password" id="password" name="password" required>
                     </div>
+                    <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem;">
+                        <input type="checkbox" id="remember-me" name="remember_me">
+                        <label for="remember-me" style="margin: 0; font-weight: normal; cursor: pointer;">Beni hatırla</label>
+                    </div>
                     <button type="submit" class="btn btn-primary btn-block">Giriş Yap</button>
                 </form>
                 <div class="login-footer">
@@ -999,6 +1003,9 @@
                     <div id="users-page" class="page">
                         <div class="page-header">
                             <h2>Kullanıcı Yönetimi</h2>
+                            <button type="button" class="btn btn-primary" id="open-create-user-modal-btn">
+                                <i class="fas fa-user-plus"></i> Yeni Kullanıcı Ekle
+                            </button>
                         </div>
                         <div class="dashboard-grid">
                             <div class="card">
@@ -1691,11 +1698,52 @@
             </div>
         </div>
 
+            <!-- Create User Modal -->
+            <div id="create-user-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3>Yeni Kullanıcı Ekle</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="create-user-form">
+                        <div class="form-group">
+                            <label for="create-user-full-name">Ad Soyad *</label>
+                            <input type="text" id="create-user-full-name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="create-user-email">E-posta *</label>
+                            <input type="email" id="create-user-email" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="create-user-phone">Telefon</label>
+                            <input type="tel" id="create-user-phone">
+                        </div>
+                        <div class="form-group">
+                            <label for="create-user-username">Kullanıcı Adı</label>
+                            <input type="text" id="create-user-username" placeholder="Boş bırakılırsa otomatik oluşturulur">
+                        </div>
+                        <div class="form-group">
+                            <label for="create-user-role">Rol</label>
+                            <select id="create-user-role" class="form-control">
+                                <option value="user">Kullanıcı</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Oluştur</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
         <!-- Toast Notifications -->
         <div id="toast-container"></div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
 </body>
 </html>

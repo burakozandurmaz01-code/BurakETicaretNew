@@ -98,7 +98,7 @@ function showMainApp() {
     updateSidebarForRole();
 }
 
-async function login(username, password) {
+async function login(username, password, remember_me = false) {
     try {
         const response = await fetch(`${API_BASE_URL}/auth/login`, {
             method: 'POST',
@@ -113,6 +113,11 @@ async function login(username, password) {
             currentUser = data.user;
             localStorage.setItem('authToken', authToken);
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            if (remember_me) {
+                localStorage.setItem('rememberedUsername', username);
+            } else {
+                localStorage.removeItem('rememberedUsername');
+            }
             if (currentUser.force_password_change) {
                 showOnboardingScreen('password');
                 showToast('Geçici şifre ile giriş yaptınız. Lütfen yeni şifre belirleyin.', 'info');
@@ -1765,8 +1770,14 @@ function initializeEventListeners() {
     loginForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const formData = new FormData(loginForm);
-        login(formData.get('username'), formData.get('password'));
+        login(formData.get('username'), formData.get('password'), formData.get('remember_me') === 'on');
     });
+
+    const remembered = localStorage.getItem('rememberedUsername');
+    if (remembered) {
+        document.getElementById('username').value = remembered;
+        document.getElementById('remember-me').checked = true;
+    }
 
     // Navigation
     document.querySelectorAll('.nav-item[data-page]').forEach(item => {
@@ -1821,6 +1832,14 @@ function initializeEventListeners() {
     });
     document.getElementById('applications-search').addEventListener('input', () => {
         loadApplications();
+    });
+    document.getElementById('open-create-user-modal-btn').addEventListener('click', () => {
+        document.getElementById('create-user-form').reset();
+        openModal('create-user-modal');
+    });
+    document.getElementById('create-user-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        createUserManual();
     });
 
     // Theme Toggle
@@ -2504,5 +2523,28 @@ async function changeAccountPassword() {
         showToast('Şifre değiştirildi', 'success');
     } catch (error) {
         showToast(error.message || 'Şifre değiştirme hatası', 'error');
+    }
+}
+
+async function createUserManual() {
+    const full_name = document.getElementById('create-user-full-name').value.trim();
+    const email = document.getElementById('create-user-email').value.trim();
+    const phone = document.getElementById('create-user-phone').value.trim();
+    const username = document.getElementById('create-user-username').value.trim();
+    const role = document.getElementById('create-user-role').value;
+    if (!full_name || !email) {
+        showToast('Ad soyad ve e-posta zorunlu', 'error');
+        return;
+    }
+    try {
+        const result = await apiRequest('/users', {
+            method: 'POST',
+            body: JSON.stringify({ full_name, email, phone, username, role })
+        });
+        alert(`Kullanıcı oluşturuldu:\nKullanıcı adı: ${result.username}\nGeçici şifre: ${result.temp_password}`);
+        closeModal();
+        loadUsers();
+    } catch (error) {
+        showToast(error.message || 'Kullanıcı oluşturulamadı', 'error');
     }
 }

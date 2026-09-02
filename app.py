@@ -1041,6 +1041,49 @@ def delete_user_admin(id):
     conn.close()
     return jsonify({'message': 'Kullanıcı silindi'})
 
+@app.route('/api/users', methods=['POST'])
+@admin_required
+def create_user_admin():
+    data = request.json or {}
+    full_name = (data.get('full_name') or '').strip()
+    email = (data.get('email') or '').strip()
+    phone = (data.get('phone') or '').strip()
+    requested_username = (data.get('username') or '').strip()
+    role = data.get('role', 'user')
+    if role not in ('admin', 'user'):
+        return jsonify({'error': 'Geçersiz rol'}), 400
+    if not full_name or not email:
+        return jsonify({'error': 'Ad soyad ve e-posta zorunlu'}), 400
+    if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email):
+        return jsonify({'error': 'Geçerli bir e-posta adresi girin'}), 400
+    if phone and not re.match(r'^[+0-9\s\-\(\)]{7,}$', phone):
+        return jsonify({'error': 'Geçerli bir telefon numarası girin'}), 400
+
+    username = generate_username(full_name, requested_username or None)
+    temp_password = generate_temp_password()
+    password_hash = bcrypt.hashpw(temp_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    user_id = str(uuid.uuid4())
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO users (id, username, password, email, full_name, phone, role, status, business_info_completed, force_password_change, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ''', (user_id, username, password_hash, email, full_name, phone, role, 'active', 0, 1))
+    cursor.execute('''
+        INSERT INTO business_profiles (id, user_id, business_name, phone, email, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ''', (str(uuid.uuid4()), user_id, full_name, phone, email))
+    conn.commit()
+    conn.close()
+    log_activity('user_created', 'user', user_id, {'username': username, 'role': role})
+    return jsonify({
+        'message': 'Kullanıcı oluşturuldu',
+        'id': user_id,
+        'username': username,
+        'temp_password': temp_password
+    }), 201
+
 @app.route('/api/business-profile', methods=['GET'])
 def get_business_profile():
     user_id = get_current_user_id()
