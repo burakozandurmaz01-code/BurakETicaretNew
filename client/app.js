@@ -468,7 +468,8 @@ async function saveCategory(formData) {
         loadCategories();
         showToast(categoryId ? 'Kategori güncellendi' : 'Kategori oluşturuldu', 'success');
     } catch (error) {
-        showToast('İşlem hatası', 'error');
+        console.error('Kategori kaydedilirken hata:', error);
+        showToast(error.message || 'İşlem hatası', 'error');
     }
 }
 
@@ -911,6 +912,138 @@ function updateSuppliersTable(suppliers) {
             </td>
         </tr>
     `).join('');
+}
+
+async function openStockMovementModal() {
+    try {
+        const data = await apiRequest('/products?limit=1000');
+        const select = document.getElementById('stock-movement-product');
+        select.innerHTML = '<option value="">Seçiniz</option>';
+        data.products.forEach(product => {
+            const option = document.createElement('option');
+            option.value = product.id;
+            option.textContent = product.name;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Ürünler yüklenirken hata:', error);
+    }
+    document.getElementById('stock-movement-form').reset();
+    document.getElementById('stock-movement-id').value = '';
+    document.getElementById('stock-movement-modal-title').textContent = 'Stok Hareketi Ekle';
+    openModal('stock-movement-modal');
+}
+
+async function saveStockMovement(formData) {
+    try {
+        const movementData = {
+            product_id: formData.get('product_id'),
+            movement_type: formData.get('movement_type'),
+            quantity: parseInt(formData.get('quantity')) || 0,
+            notes: formData.get('notes') || null
+        };
+
+        if (!movementData.product_id) {
+            showToast('Ürün seçmelisiniz', 'error');
+            return;
+        }
+        if (movementData.quantity === 0) {
+            showToast('Miktar 0 olamaz', 'error');
+            return;
+        }
+
+        await apiRequest('/stock-movements', {
+            method: 'POST',
+            body: JSON.stringify(movementData)
+        });
+
+        closeModal();
+        loadStockMovements();
+        showToast('Stok hareketi kaydedildi', 'success');
+    } catch (error) {
+        console.error('Stok hareketi kaydedilirken hata:', error);
+        showToast(error.message || 'İşlem hatası', 'error');
+    }
+}
+
+async function openSupplierModal() {
+    document.getElementById('supplier-form').reset();
+    document.getElementById('supplier-id').value = '';
+    document.getElementById('supplier-modal-title').textContent = 'Yeni Tedarikçi';
+    openModal('supplier-modal');
+}
+
+async function saveSupplier(formData) {
+    try {
+        const supplierId = document.getElementById('supplier-id').value;
+        const url = supplierId ? `/suppliers/${supplierId}` : '/suppliers';
+        const method = supplierId ? 'PUT' : 'POST';
+
+        const supplierData = {
+            name: formData.get('name'),
+            contact_person: formData.get('contact_person') || null,
+            email: formData.get('email') || null,
+            phone: formData.get('phone') || null,
+            address: formData.get('address') || null,
+            city: formData.get('city') || null,
+            tax_number: formData.get('tax_number') || null,
+            tax_office: formData.get('tax_office') || null,
+            payment_terms: formData.get('payment_terms') || null,
+            notes: formData.get('notes') || null
+        };
+
+        if (!supplierData.name) {
+            showToast('Firma adı zorunludur', 'error');
+            return;
+        }
+
+        await apiRequest(url, {
+            method,
+            body: JSON.stringify(supplierData)
+        });
+
+        closeModal();
+        loadSuppliers();
+        showToast(supplierId ? 'Tedarikçi güncellendi' : 'Tedarikçi oluşturuldu', 'success');
+    } catch (error) {
+        console.error('Tedarikçi kaydedilirken hata:', error);
+        showToast(error.message || 'İşlem hatası', 'error');
+    }
+}
+
+async function editSupplier(supplierId) {
+    try {
+        const supplier = await apiRequest(`/suppliers/${supplierId}`);
+        document.getElementById('supplier-id').value = supplier.id;
+        document.getElementById('supplier-name').value = supplier.name || '';
+        document.getElementById('supplier-contact-person').value = supplier.contact_person || '';
+        document.getElementById('supplier-email').value = supplier.email || '';
+        document.getElementById('supplier-phone').value = supplier.phone || '';
+        document.getElementById('supplier-address').value = supplier.address || '';
+        document.getElementById('supplier-city').value = supplier.city || '';
+        document.getElementById('supplier-tax-number').value = supplier.tax_number || '';
+        document.getElementById('supplier-tax-office').value = supplier.tax_office || '';
+        document.getElementById('supplier-payment-terms').value = supplier.payment_terms || '';
+        document.getElementById('supplier-notes').value = supplier.notes || '';
+        document.getElementById('supplier-modal-title').textContent = 'Tedarikçi Düzenle';
+        openModal('supplier-modal');
+    } catch (error) {
+        console.error('Tedarikçi yüklenirken hata:', error);
+        showToast('Tedarikçi yüklenirken hata', 'error');
+    }
+}
+
+async function deleteSupplier(supplierId) {
+    if (!confirm('Bu tedarikçiyi silmek istediğinize emin misiniz?')) return;
+
+    try {
+        await apiRequest(`/suppliers/${supplierId}`, { method: 'DELETE' });
+        loadSuppliers();
+        showToast('Tedarikçi silindi', 'success');
+    } catch (error) {
+        console.error('Tedarikçi silinirken hata:', error);
+        showToast(error.message || 'Tedarikçi silme hatası', 'error');
+    }
 }
 
 // Returns
@@ -1738,9 +1871,29 @@ function initializeEventListeners() {
         loadStockMovements(1, document.getElementById('stock-movement-type-filter').value);
     });
 
+    document.getElementById('add-stock-movement-btn').addEventListener('click', () => {
+        openStockMovementModal();
+    });
+
+    document.getElementById('stock-movement-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveStockMovement(formData);
+    });
+
     // Suppliers
     document.getElementById('supplier-search').addEventListener('input', (e) => {
         loadSuppliers(e.target.value);
+    });
+
+    document.getElementById('add-supplier-btn').addEventListener('click', () => {
+        openSupplierModal();
+    });
+
+    document.getElementById('supplier-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        saveSupplier(formData);
     });
 
     // Returns

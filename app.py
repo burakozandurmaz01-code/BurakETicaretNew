@@ -1983,6 +1983,17 @@ def get_suppliers():
     
     return jsonify([dict(s) for s in suppliers])
 
+@app.route('/api/suppliers/<id>', methods=['GET'])
+def get_supplier(id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM suppliers WHERE id = ? AND is_active = 1', (id,))
+    supplier = cursor.fetchone()
+    conn.close()
+    if not supplier:
+        return jsonify({'error': 'Tedarikçi bulunamadı'}), 404
+    return jsonify(_as_dict(supplier))
+
 @app.route('/api/suppliers', methods=['POST'])
 def create_supplier():
     data = request.json

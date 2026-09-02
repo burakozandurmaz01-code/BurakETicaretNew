@@ -1034,6 +1034,112 @@
                 </div>
             </div>
 
+            <!-- Stock Movement Modal -->
+            <div id="stock-movement-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3 id="stock-movement-modal-title">Stok Hareketi Ekle</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="stock-movement-form">
+                        <input type="hidden" id="stock-movement-id">
+                        <div class="form-group">
+                            <label for="stock-movement-product">Ürün *</label>
+                            <select id="stock-movement-product" name="product_id" required>
+                                <option value="">Seçiniz</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="stock-movement-type">Hareket Tipi *</label>
+                            <select id="stock-movement-type" name="movement_type" required>
+                                <option value="in">Giriş</option>
+                                <option value="out">Çıkış</option>
+                                <option value="adjustment">Düzeltme</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="stock-movement-quantity">Miktar *</label>
+                            <input type="number" id="stock-movement-quantity" name="quantity" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="stock-movement-notes">Notlar</label>
+                            <textarea id="stock-movement-notes" name="notes" rows="2"></textarea>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Kaydet</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Supplier Modal -->
+            <div id="supplier-modal" class="modal hidden">
+                <div class="modal-header">
+                    <h3 id="supplier-modal-title">Yeni Tedarikçi</h3>
+                    <button class="btn btn-icon close-modal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="supplier-form">
+                        <input type="hidden" id="supplier-id">
+                        <div class="form-group">
+                            <label for="supplier-name">Firma Adı *</label>
+                            <input type="text" id="supplier-name" name="name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="supplier-contact-person">İletişim Kişisi</label>
+                            <input type="text" id="supplier-contact-person" name="contact_person">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="supplier-email">E-posta</label>
+                                <input type="email" id="supplier-email" name="email">
+                            </div>
+                            <div class="form-group">
+                                <label for="supplier-phone">Telefon</label>
+                                <input type="tel" id="supplier-phone" name="phone">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="supplier-address">Adres</label>
+                            <textarea id="supplier-address" name="address" rows="2"></textarea>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="supplier-city">Şehir</label>
+                                <input type="text" id="supplier-city" name="city">
+                            </div>
+                            <div class="form-group">
+                                <label for="supplier-tax-number">Vergi No</label>
+                                <input type="text" id="supplier-tax-number" name="tax_number">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="supplier-tax-office">Vergi Dairesi</label>
+                                <input type="text" id="supplier-tax-office" name="tax_office">
+                            </div>
+                            <div class="form-group">
+                                <label for="supplier-payment-terms">Ödeme Şartları</label>
+                                <input type="text" id="supplier-payment-terms" name="payment_terms">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="supplier-notes">Notlar</label>
+                            <textarea id="supplier-notes" name="notes" rows="2"></textarea>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary close-modal">İptal</button>
+                            <button type="submit" class="btn btn-primary">Kaydet</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
             <!-- Customer Modal -->
             <div id="customer-modal" class="modal hidden">
                 <div class="modal-header">
