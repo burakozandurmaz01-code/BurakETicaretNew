@@ -2564,7 +2564,6 @@ def create_variation():
     
     # Log activity
     log_activity(
-        request.headers.get('X-User-ID', 'admin'),
         'create',
         'variation',
         variation_id,
@@ -2601,7 +2600,6 @@ def update_variation(variation_id):
     
     # Log activity
     log_activity(
-        request.headers.get('X-User-ID', 'admin'),
         'update',
         'variation',
         variation_id,
@@ -2621,7 +2619,6 @@ def delete_variation(variation_id):
     
     # Log activity
     log_activity(
-        request.headers.get('X-User-ID', 'admin'),
         'delete',
         'variation',
         variation_id,
