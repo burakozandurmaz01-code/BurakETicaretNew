@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, verify_jwt_in_request
+from werkzeug.exceptions import HTTPException
 import sqlite3
 import bcrypt
 import os
@@ -681,6 +682,8 @@ def require_auth_for_api():
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
+    if isinstance(error, HTTPException):
+        return jsonify({'error': error.description}), error.code
     traceback.print_exc()
     # Log activity if possible
     try:

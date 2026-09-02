@@ -1,5 +1,11 @@
 // API Configuration
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = window.location.origin + '/api';
+
+function resolveUrl(url) {
+    if (!url) return '';
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    return window.location.origin + (url.startsWith('/') ? url : '/' + url);
+}
 
 // State Management
 let currentUser = null;
@@ -264,7 +270,7 @@ function updateProductsTable(products) {
 
         return `
         <tr>
-            <td>${product.image_url ? `<img src="${API_BASE_URL}${product.image_url}" alt="${product.name}">` : '<div class="no-image">-</div>'}</td>
+            <td>${product.image_url ? `<img src="${resolveUrl(product.image_url)}" alt="${product.name}">` : '<div class="no-image">-</div>'}</td>
             <td>${product.name}</td>
             <td>${product.sku || '-'}</td>
             <td>${product.category_name || '-'}</td>
