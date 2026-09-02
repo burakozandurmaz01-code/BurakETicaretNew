@@ -45,6 +45,8 @@ class CursorWrapper:
     def execute(self, query, params=None):
         if self._db_type == 'postgres':
             query = query.replace('?', '%s')
+            if params is not None:
+                params = tuple(int(p) if isinstance(p, bool) else p for p in params)
         if params is None:
             return self._cursor.execute(query)
         return self._cursor.execute(query, params)
