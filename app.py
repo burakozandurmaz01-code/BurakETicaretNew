@@ -1450,9 +1450,6 @@ def get_products():
     conn = get_db()
     cursor = conn.cursor()
     
-    current_user_id = get_current_user_id()
-    is_admin = get_current_user_role() == 'admin'
-
     query = '''
         SELECT p.*, c.name as category_name
         FROM products p
@@ -1460,10 +1457,6 @@ def get_products():
         WHERE p.deleted_at IS NULL
     '''
     params = []
-
-    if not is_admin:
-        query += ' AND p.user_id = ?'
-        params.append(current_user_id)
 
     if category_id:
         query += ' AND p.category_id = ?'
@@ -1492,10 +1485,6 @@ def get_products():
     count_query = 'SELECT COUNT(*) as total FROM products WHERE deleted_at IS NULL'
     count_params = []
 
-    if not is_admin:
-        count_query += ' AND user_id = ?'
-        count_params.append(current_user_id)
-
     if category_id:
         count_query += ' AND category_id = ?'
         count_params.append(category_id)
@@ -1522,20 +1511,12 @@ def get_products():
 def get_product(id):
     conn = get_db()
     cursor = conn.cursor()
-    if get_current_user_role() == 'admin':
-        cursor.execute('''
-            SELECT p.*, c.name as category_name
-            FROM products p
-            LEFT JOIN categories c ON p.category_id = c.id
-            WHERE p.id = ? AND p.deleted_at IS NULL
-        ''', (id,))
-    else:
-        cursor.execute('''
-            SELECT p.*, c.name as category_name
-            FROM products p
-            LEFT JOIN categories c ON p.category_id = c.id
-            WHERE p.id = ? AND p.deleted_at IS NULL AND p.user_id = ?
-        ''', (id, get_current_user_id()))
+    cursor.execute('''
+        SELECT p.*, c.name as category_name
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE p.id = ? AND p.deleted_at IS NULL
+    ''', (id,))
     product = cursor.fetchone()
     conn.close()
 
@@ -1779,15 +1760,8 @@ def get_customers():
     conn = get_db()
     cursor = conn.cursor()
 
-    current_user_id = get_current_user_id()
-    is_admin = get_current_user_role() == 'admin'
-
     query = 'SELECT * FROM customers WHERE deleted_at IS NULL'
     params = []
-
-    if not is_admin:
-        query += ' AND user_id = ?'
-        params.append(current_user_id)
 
     if search:
         query += ' AND (name LIKE ? OR email LIKE ? OR phone LIKE ?)'
@@ -1806,12 +1780,7 @@ def get_customers():
 def get_customer(id):
     conn = get_db()
     cursor = conn.cursor()
-    is_admin = get_current_user_role() == 'admin'
-    current_user_id = get_current_user_id()
-    if is_admin:
-        cursor.execute('SELECT * FROM customers WHERE id = ? AND deleted_at IS NULL', (id,))
-    else:
-        cursor.execute('SELECT * FROM customers WHERE id = ? AND deleted_at IS NULL AND user_id = ?', (id, current_user_id))
+    cursor.execute('SELECT * FROM customers WHERE id = ? AND deleted_at IS NULL', (id,))
     customer = cursor.fetchone()
     conn.close()
     if not customer:
@@ -1943,8 +1912,6 @@ def get_orders():
 
     conn = get_db()
     cursor = conn.cursor()
-    current_user_id = get_current_user_id()
-    is_admin = get_current_user_role() == 'admin'
 
     query = '''
         SELECT o.*, c.name as customer_name
@@ -1953,10 +1920,6 @@ def get_orders():
         WHERE o.deleted_at IS NULL
     '''
     params = []
-
-    if not is_admin:
-        query += ' AND o.user_id = ?'
-        params.append(current_user_id)
 
     if status:
         query += ' AND o.status = ?'
@@ -1989,9 +1952,6 @@ def get_orders():
     count_query = 'SELECT COUNT(*) as total FROM orders o LEFT JOIN customers c ON o.customer_id = c.id WHERE o.deleted_at IS NULL'
     count_params = []
 
-    if not is_admin:
-        count_query += ' AND o.user_id = ?'
-        count_params.append(current_user_id)
 
     if status:
         count_query += ' AND o.status = ?'
@@ -2031,22 +1991,12 @@ def get_orders():
 def get_order(id):
     conn = get_db()
     cursor = conn.cursor()
-    is_admin = get_current_user_role() == 'admin'
-    current_user_id = get_current_user_id()
-    if is_admin:
-        cursor.execute('''
-            SELECT o.*, c.name as customer_name
-            FROM orders o
-            LEFT JOIN customers c ON o.customer_id = c.id
-            WHERE o.id = ? AND o.deleted_at IS NULL
-        ''', (id,))
-    else:
-        cursor.execute('''
-            SELECT o.*, c.name as customer_name
-            FROM orders o
-            LEFT JOIN customers c ON o.customer_id = c.id
-            WHERE o.id = ? AND o.deleted_at IS NULL AND o.user_id = ?
-        ''', (id, current_user_id))
+    cursor.execute('''
+        SELECT o.*, c.name as customer_name
+        FROM orders o
+        LEFT JOIN customers c ON o.customer_id = c.id
+        WHERE o.id = ? AND o.deleted_at IS NULL
+    ''', (id,))
     order = cursor.fetchone()
 
     if not order:
