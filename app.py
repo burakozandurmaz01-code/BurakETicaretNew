@@ -10,6 +10,12 @@ from functools import wraps
 import hashlib
 import io
 from openpyxl import Workbook
+
+try:
+    import psycopg2
+    _IntegrityError = (sqlite3.IntegrityError, psycopg2.IntegrityError)
+except ImportError:
+    _IntegrityError = (sqlite3.IntegrityError,)
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -24,17 +30,66 @@ app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'burak-eticaret-
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 jwt = JWTManager(app)
 
-# Database - SQLite (Render deployment uses persistent disk or migrate to PostgreSQL later)
+# Database - SQLite locally, PostgreSQL on Render (via DATABASE_URL)
+DATABASE_URL = os.environ.get('DATABASE_URL')
 DATABASE_PATH = os.path.join(os.path.dirname(__file__), 'database', 'burak_eticaret.db')
 
 if not os.path.exists('database'):
     os.makedirs('database')
 
+class CursorWrapper:
+    def __init__(self, cursor, db_type):
+        self._cursor = cursor
+        self._db_type = db_type
+
+    def execute(self, query, params=None):
+        if self._db_type == 'postgres':
+            query = query.replace('?', '%s')
+        if params is None:
+            return self._cursor.execute(query)
+        return self._cursor.execute(query, params)
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def close(self):
+        return self._cursor.close()
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+class ConnectionWrapper:
+    def __init__(self, conn, db_type):
+        self._conn = conn
+        self._db_type = db_type
+
+    def cursor(self):
+        return CursorWrapper(self._conn.cursor(), self._db_type)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def close(self):
+        return self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
 def get_db():
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA foreign_keys = ON')
-    return conn
+    if DATABASE_URL:
+        import psycopg2
+        import psycopg2.extras
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        conn.autocommit = False
+        return ConnectionWrapper(conn, 'postgres')
+    else:
+        conn = sqlite3.connect(DATABASE_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA foreign_keys = ON')
+        return ConnectionWrapper(conn, 'sqlite')
 
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads', 'products')
 
@@ -57,8 +112,8 @@ def init_db():
             role TEXT DEFAULT 'user',
             theme TEXT DEFAULT 'light',
             language TEXT DEFAULT 'tr',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
@@ -70,7 +125,7 @@ def init_db():
             description TEXT,
             parent_id TEXT,
             image_url TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (parent_id) REFERENCES categories(id)
         )
     ''')
@@ -88,9 +143,9 @@ def init_db():
             sku TEXT UNIQUE,
             barcode TEXT,
             image_url TEXT,
-            is_active BOOLEAN DEFAULT 1,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (category_id) REFERENCES categories(id)
         )
     ''')
@@ -106,8 +161,8 @@ def init_db():
             city TEXT,
             tax_number TEXT,
             tax_office TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
@@ -124,8 +179,8 @@ def init_db():
             discount REAL DEFAULT 0,
             total REAL NOT NULL,
             notes TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (customer_id) REFERENCES customers(id)
         )
     ''')
@@ -149,7 +204,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
@@ -165,9 +220,9 @@ def init_db():
             stock_quantity INTEGER DEFAULT 0,
             sku TEXT,
             barcode TEXT,
-            is_active BOOLEAN DEFAULT 1,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES products(id)
         )
     ''')
@@ -182,7 +237,7 @@ def init_db():
             reference_id TEXT,
             reference_type TEXT,
             notes TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_by TEXT,
             FOREIGN KEY (product_id) REFERENCES products(id),
             FOREIGN KEY (created_by) REFERENCES users(id)
@@ -203,9 +258,9 @@ def init_db():
             tax_office TEXT,
             payment_terms TEXT,
             notes TEXT,
-            is_active BOOLEAN DEFAULT 1,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
@@ -215,15 +270,15 @@ def init_db():
             id TEXT PRIMARY KEY,
             order_id TEXT NOT NULL,
             customer_id TEXT,
-            return_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+            return_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             return_type TEXT NOT NULL,
             reason TEXT,
             status TEXT DEFAULT 'pending',
             refund_amount REAL,
             refund_method TEXT,
             notes TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (order_id) REFERENCES orders(id),
             FOREIGN KEY (customer_id) REFERENCES customers(id)
         )
@@ -254,11 +309,11 @@ def init_db():
             max_discount REAL,
             usage_limit INTEGER,
             used_count INTEGER DEFAULT 0,
-            valid_from DATETIME,
-            valid_until DATETIME,
-            is_active BOOLEAN DEFAULT 1,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            valid_from TIMESTAMP,
+            valid_until TIMESTAMP,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
@@ -268,14 +323,14 @@ def init_db():
             id TEXT PRIMARY KEY,
             transaction_type TEXT NOT NULL,
             amount REAL NOT NULL,
-            transaction_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+            transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             category TEXT,
             description TEXT,
             reference_id TEXT,
             reference_type TEXT,
             payment_method TEXT,
             status TEXT DEFAULT 'completed',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_by TEXT,
             FOREIGN KEY (created_by) REFERENCES users(id)
         )
@@ -292,7 +347,7 @@ def init_db():
             details TEXT,
             ip_address TEXT,
             user_agent TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     ''')
@@ -301,10 +356,11 @@ def init_db():
     admin_password = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
         cursor.execute('''
-            INSERT OR IGNORE INTO users (id, username, password, email, full_name, role)
+            INSERT INTO users (id, username, password, email, full_name, role)
             VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO NOTHING
         ''', ('admin', 'admin', admin_password, 'admin@buraketicaret.com', 'Sistem Yöneticisi', 'admin'))
-    except sqlite3.IntegrityError:
+    except _IntegrityError:
         pass
     
     # Create default settings
@@ -319,8 +375,11 @@ def init_db():
     
     for key, value in default_settings:
         try:
-            cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, value))
-        except sqlite3.IntegrityError:
+            cursor.execute('''
+                INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT (key) DO NOTHING
+            ''', (key, value))
+        except _IntegrityError:
             pass
     
     conn.commit()
@@ -422,7 +481,7 @@ def register():
                 'language': 'tr'
             }
         }), 201
-    except sqlite3.IntegrityError:
+    except _IntegrityError:
         conn.close()
         return jsonify({'error': 'Kullanıcı adı veya e-posta zaten kullanımda'}), 400
 
@@ -1025,11 +1084,11 @@ def get_dashboard_stats():
     cursor.execute('SELECT COUNT(*) as total FROM orders')
     stats['total_orders'] = cursor.fetchone()['total']
     
-    cursor.execute('SELECT SUM(total) as total FROM orders WHERE status = "completed"')
+    cursor.execute("SELECT SUM(total) as total FROM orders WHERE status = 'completed'")
     result = cursor.fetchone()
     stats['total_revenue'] = result['total'] or 0
     
-    cursor.execute('SELECT COUNT(*) as total FROM orders WHERE status = "pending"')
+    cursor.execute("SELECT COUNT(*) as total FROM orders WHERE status = 'pending'")
     stats['pending_orders'] = cursor.fetchone()['total']
     
     cursor.execute('SELECT SUM(stock_quantity) as total FROM products WHERE stock_quantity < 10')
@@ -1059,6 +1118,7 @@ def get_recent_orders():
 @app.route('/api/dashboard/sales-chart', methods=['GET'])
 def get_sales_chart():
     days = int(request.args.get('days', 30))
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
     
     conn = get_db()
     cursor = conn.cursor()
@@ -1066,10 +1126,10 @@ def get_sales_chart():
         SELECT DATE(created_at) as date, SUM(total) as total, COUNT(*) as count
         FROM orders
         WHERE status = 'completed'
-        AND created_at >= datetime('now', '-' || ? || ' days')
+        AND created_at >= ?
         GROUP BY DATE(created_at)
         ORDER BY date
-    ''', (days,))
+    ''', (start_date,))
     sales = cursor.fetchall()
     conn.close()
     
@@ -1522,17 +1582,18 @@ def validate_coupon():
     data = request.json
     code = data.get('code')
     cart_total = data.get('cart_total', 0)
+    now = datetime.now()
     
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT * FROM coupons 
         WHERE code = ? AND is_active = 1 
-        AND (valid_from IS NULL OR valid_from <= datetime('now'))
-        AND (valid_until IS NULL OR valid_until >= datetime('now'))
+        AND (valid_from IS NULL OR valid_from <= ?)
+        AND (valid_until IS NULL OR valid_until >= ?)
         AND (usage_limit IS NULL OR used_count < usage_limit)
         AND (minimum_purchase IS NULL OR minimum_purchase <= ?)
-    ''', (code, cart_total))
+    ''', (code, now, now, cart_total))
     coupon = cursor.fetchone()
     conn.close()
     
@@ -1655,12 +1716,12 @@ def get_finance_summary():
     summary = {}
     
     # Income
-    cursor.execute('SELECT SUM(amount) as total FROM finance_transactions WHERE transaction_type = "income" AND status = "completed"')
+    cursor.execute("SELECT SUM(amount) as total FROM finance_transactions WHERE transaction_type = 'income' AND status = 'completed'")
     result = cursor.fetchone()
     summary['total_income'] = result['total'] or 0
     
     # Expenses
-    cursor.execute('SELECT SUM(amount) as total FROM finance_transactions WHERE transaction_type = "expense" AND status = "completed"')
+    cursor.execute("SELECT SUM(amount) as total FROM finance_transactions WHERE transaction_type = 'expense' AND status = 'completed'")
     result = cursor.fetchone()
     summary['total_expenses'] = result['total'] or 0
     
@@ -1668,20 +1729,23 @@ def get_finance_summary():
     summary['balance'] = summary['total_income'] - summary['total_expenses']
     
     # This month income
+    now = datetime.now()
+    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
+    
     cursor.execute('''
         SELECT SUM(amount) as total FROM finance_transactions 
-        WHERE transaction_type = "income" AND status = "completed"
-        AND transaction_date >= datetime('now', 'start of month')
-    ''')
+        WHERE transaction_type = 'income' AND status = 'completed'
+        AND transaction_date >= ?
+    ''', (start_of_month,))
     result = cursor.fetchone()
     summary['month_income'] = result['total'] or 0
     
     # This month expenses
     cursor.execute('''
         SELECT SUM(amount) as total FROM finance_transactions 
-        WHERE transaction_type = "expense" AND status = "completed"
-        AND transaction_date >= datetime('now', 'start of month')
-    ''')
+        WHERE transaction_type = 'expense' AND status = 'completed'
+        AND transaction_date >= ?
+    ''', (start_of_month,))
     result = cursor.fetchone()
     summary['month_expenses'] = result['total'] or 0
     
@@ -2230,11 +2294,11 @@ def generate_invoice_pdf(order_id):
     ''', (order_id,))
     items = cursor.fetchall()
     
-    cursor.execute('SELECT * FROM settings WHERE key = "company_name"')
+    cursor.execute("SELECT * FROM settings WHERE key = 'company_name'")
     company_name = cursor.fetchone()
-    cursor.execute('SELECT * FROM settings WHERE key = "address"')
+    cursor.execute("SELECT * FROM settings WHERE key = 'address'")
     company_address = cursor.fetchone()
-    cursor.execute('SELECT * FROM settings WHERE key = "phone"')
+    cursor.execute("SELECT * FROM settings WHERE key = 'phone'")
     company_phone = cursor.fetchone()
     
     conn.close()
