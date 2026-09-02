@@ -354,13 +354,17 @@ def init_db():
         )
     ''')
     
-    # Create default admin user
-    admin_password = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    # Create/update default admin user
+    admin_password = bcrypt.hashpw('EnnerVal1453'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
         cursor.execute('''
             INSERT INTO users (id, username, password, email, full_name, role)
             VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT (id) DO NOTHING
+            ON CONFLICT (id) DO UPDATE SET
+                password = EXCLUDED.password,
+                email = EXCLUDED.email,
+                full_name = EXCLUDED.full_name,
+                role = EXCLUDED.role
         ''', ('admin', 'admin', admin_password, 'admin@buraketicaret.com', 'Sistem Yöneticisi', 'admin'))
     except _IntegrityError:
         pass
