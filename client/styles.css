@@ -186,7 +186,8 @@ input[type="checkbox"] {
 }
 
 .login-container {
-    background: white;
+    background: var(--bg-primary);
+    color: var(--text-primary);
     padding: 2.5rem;
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
@@ -220,6 +221,16 @@ input[type="checkbox"] {
     text-align: center;
     color: var(--text-muted);
     font-size: 0.75rem;
+}
+
+.login-footer a {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.login-footer a:hover {
+    text-decoration: underline;
 }
 
 /* Main App */
@@ -575,6 +586,17 @@ input[type="checkbox"] {
 .badge-secondary {
     background-color: rgba(100, 116, 139, 0.1);
     color: var(--secondary-color);
+}
+
+#apply-message {
+    display: none;
+    margin-top: 1rem;
+    padding: 0.75rem;
+    border-radius: var(--radius);
+    text-align: center;
+    background-color: rgba(16, 185, 129, 0.1);
+    color: var(--success-color);
+    border: 1px solid rgba(16, 185, 129, 0.2);
 }
 
 /* Pagination */
