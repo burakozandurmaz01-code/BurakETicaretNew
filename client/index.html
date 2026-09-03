@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Burak E-Ticaret Yönetim Sistemi</title>
-    <link rel="stylesheet" href="styles.css?v=10">
+    <link rel="stylesheet" href="styles.css?v=11">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -103,7 +103,7 @@
                         <label>Yeni Şifre (en az 8 karakter)</label>
                         <input type="password" id="onboarding-new-password" class="form-control" minlength="8" required>
                     </div>
-                    <button type="button" id="onboarding-password-btn" class="btn btn-primary" style="width:100%;" onclick="if(typeof changeOnboardingPassword==='function'){try{changeOnboardingPassword();}catch(e){console.error(e); alert(e.message);}}else{alert('Sayfa yüklenemedi. Lütfen Ctrl+Shift+R ile yenileyin.');} return false;">Şifreyi Güncelle</button>
+                    <button type="button" id="onboarding-password-btn" class="btn btn-primary" style="width:100%;" onclick="if(typeof changeOnboardingPassword==='function'){try{changeOnboardingPassword().catch(function(e){console.error(e); alert('Şifre hatası: '+(e.message||e));});}catch(e){console.error(e); alert('HATA: '+(e.message||e));}}else{alert('Sayfa yüklenemedi. Lütfen Ctrl+Shift+R ile yenileyin.');} return false;">Şifreyi Güncelle</button>
                 </div>
                 <div id="onboarding-step-2" class="onboarding-step" style="display:none;">
                     <h3>İşletme Bilgilerinizi Tamamlayın</h3>
@@ -151,7 +151,7 @@
                         <label>Logo URL</label>
                         <input type="text" id="onboarding-logo-url" class="form-control">
                     </div>
-                    <button type="button" id="onboarding-business-btn" class="btn btn-primary" style="width:100%;" onclick="if(typeof saveOnboardingBusiness==='function'){try{saveOnboardingBusiness();}catch(e){console.error(e); alert(e.message);}}else{alert('Sayfa yüklenemedi. Lütfen Ctrl+Shift+R ile yenileyin.');} return false;">Bilgileri Kaydet</button>
+                    <button type="button" id="onboarding-business-btn" class="btn btn-primary" style="width:100%;" onclick="if(typeof saveOnboardingBusiness==='function'){try{saveOnboardingBusiness().catch(function(e){console.error(e); alert('Kaydetme hatası: '+(e.message||e));});}catch(e){console.error(e); alert('HATA: '+(e.message||e));}}else{alert('Sayfa yüklenemedi. Lütfen Ctrl+Shift+R ile yenileyin.');} return false;">Bilgileri Kaydet</button>
                 </div>
             </div>
         </div>
@@ -1744,6 +1744,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="app.js?v=10"></script>
+    <script src="app.js?v=11"></script>
 </body>
 </html>

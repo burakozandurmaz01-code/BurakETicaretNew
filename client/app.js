@@ -23,9 +23,9 @@ const modalOverlay = document.getElementById('modal-overlay');
 
 // Initialize App
 document.addEventListener('DOMContentLoaded', () => {
-    checkAuth();
-    updateDashboardStats();
-    initializeEventListeners();
+    try { checkAuth(); } catch (e) { console.error('checkAuth hatası:', e); }
+    try { updateDashboardStats(); } catch (e) { console.error('updateDashboardStats hatası:', e); }
+    try { initializeEventListeners(); } catch (e) { console.error('initializeEventListeners hatası:', e); }
 });
 
 // Authentication
@@ -1629,6 +1629,11 @@ function updatePagination(containerId, currentPage, totalPages, loadFunction) {
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
+    if (!container) {
+        console.error('Toast container bulunamadı:', message);
+        alert(type === 'error' ? 'HATA: ' + message : message);
+        return;
+    }
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.innerHTML = `
@@ -1794,7 +1799,16 @@ function initializeEventListeners() {
         e.preventDefault();
         submitApplication();
     });
-    // Onboarding button handlers are inline in index.html to avoid cache issues
+    // Onboarding button handlers are also attached here as a fallback if index.html is cached without inline onclick
+    const onboardingPwdBtn = document.getElementById('onboarding-password-btn');
+    if (onboardingPwdBtn && !onboardingPwdBtn.onclick) {
+        onboardingPwdBtn.addEventListener('click', () => changeOnboardingPassword());
+    }
+    const onboardingBusBtn = document.getElementById('onboarding-business-btn');
+    if (onboardingBusBtn && !onboardingBusBtn.onclick) {
+        onboardingBusBtn.addEventListener('click', () => saveOnboardingBusiness());
+    }
+
     document.getElementById('save-account-btn').addEventListener('click', () => {
         saveAccountBusiness();
     });
