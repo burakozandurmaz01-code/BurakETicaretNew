@@ -1794,12 +1794,7 @@ function initializeEventListeners() {
         e.preventDefault();
         submitApplication();
     });
-    document.getElementById('onboarding-password-btn').addEventListener('click', () => {
-        changeOnboardingPassword();
-    });
-    document.getElementById('onboarding-business-btn').addEventListener('click', () => {
-        saveOnboardingBusiness();
-    });
+    // Onboarding button handlers are inline in index.html to avoid cache issues
     document.getElementById('save-account-btn').addEventListener('click', () => {
         saveAccountBusiness();
     });

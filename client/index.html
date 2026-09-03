@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Burak E-Ticaret Yönetim Sistemi</title>
-    <link rel="stylesheet" href="styles.css?v=9">
+    <link rel="stylesheet" href="styles.css?v=10">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -79,7 +79,8 @@
                 </form>
                 <div id="apply-message"></div>
                 <div class="login-footer" style="margin-top: 1rem; text-align: center;">
-                    <a href="#" id="back-to-login">Giriş yap</a>
+                    <p>Zaten hesabınız var mı?</p>
+                    <button type="button" id="back-to-login" class="btn btn-secondary" style="width: 100%;">Giriş Yapın</button>
                 </div>
             </div>
         </div>
@@ -102,7 +103,7 @@
                         <label>Yeni Şifre (en az 8 karakter)</label>
                         <input type="password" id="onboarding-new-password" class="form-control" minlength="8" required>
                     </div>
-                    <button type="button" id="onboarding-password-btn" class="btn btn-primary" style="width:100%;">Şifreyi Güncelle</button>
+                    <button type="button" id="onboarding-password-btn" class="btn btn-primary" style="width:100%;" onclick="if(typeof changeOnboardingPassword==='function'){try{changeOnboardingPassword();}catch(e){console.error(e); alert(e.message);}}else{alert('Sayfa yüklenemedi. Lütfen Ctrl+Shift+R ile yenileyin.');} return false;">Şifreyi Güncelle</button>
                 </div>
                 <div id="onboarding-step-2" class="onboarding-step" style="display:none;">
                     <h3>İşletme Bilgilerinizi Tamamlayın</h3>
@@ -150,7 +151,7 @@
                         <label>Logo URL</label>
                         <input type="text" id="onboarding-logo-url" class="form-control">
                     </div>
-                    <button type="button" id="onboarding-business-btn" class="btn btn-primary" style="width:100%;">Bilgileri Kaydet</button>
+                    <button type="button" id="onboarding-business-btn" class="btn btn-primary" style="width:100%;" onclick="if(typeof saveOnboardingBusiness==='function'){try{saveOnboardingBusiness();}catch(e){console.error(e); alert(e.message);}}else{alert('Sayfa yüklenemedi. Lütfen Ctrl+Shift+R ile yenileyin.');} return false;">Bilgileri Kaydet</button>
                 </div>
             </div>
         </div>
@@ -1743,6 +1744,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="app.js?v=9"></script>
+    <script src="app.js?v=10"></script>
 </body>
 </html>
