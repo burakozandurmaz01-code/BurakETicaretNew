@@ -3,8 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Burak E-Ticaret Yönetim Sistemi</title>
-    <link rel="stylesheet" href="styles.css?v=7">
+    <link rel="stylesheet" href="styles.css?v=8">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -101,36 +104,36 @@
                     </div>
                     <button type="button" id="onboarding-password-btn" class="btn btn-primary" style="width:100%;">Şifreyi Güncelle</button>
                 </div>
-                <form id="onboarding-business-form" class="onboarding-step" style="display:none;">
+                <div id="onboarding-step-2" class="onboarding-step" style="display:none;">
                     <h3>İşletme Bilgilerinizi Tamamlayın</h3>
                     <div class="form-group">
                         <label>İşletme / Dükkan Adı *</label>
-                        <input type="text" id="onboarding-business-name" class="form-control" required>
+                        <input type="text" id="onboarding-business-name" class="form-control">
                     </div>
                     <div class="form-group">
                         <label>Yetkili Ad Soyad *</label>
-                        <input type="text" id="onboarding-authorized-name" class="form-control" required>
+                        <input type="text" id="onboarding-authorized-name" class="form-control">
                     </div>
                     <div class="form-group">
                         <label>Telefon *</label>
-                        <input type="tel" id="onboarding-phone" class="form-control" required>
+                        <input type="text" id="onboarding-phone" class="form-control">
                     </div>
                     <div class="form-group">
                         <label>E-posta *</label>
-                        <input type="email" id="onboarding-email" class="form-control" required>
+                        <input type="text" id="onboarding-email" class="form-control">
                     </div>
                     <div class="form-group">
                         <label>Adres *</label>
-                        <textarea id="onboarding-address" class="form-control" rows="2" required></textarea>
+                        <textarea id="onboarding-address" class="form-control" rows="2"></textarea>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label>İl *</label>
-                            <input type="text" id="onboarding-city" class="form-control" required>
+                            <input type="text" id="onboarding-city" class="form-control">
                         </div>
                         <div class="form-group">
                             <label>İlçe *</label>
-                            <input type="text" id="onboarding-district" class="form-control" required>
+                            <input type="text" id="onboarding-district" class="form-control">
                         </div>
                     </div>
                     <div class="form-row">
@@ -147,8 +150,8 @@
                         <label>Logo URL</label>
                         <input type="text" id="onboarding-logo-url" class="form-control">
                     </div>
-                    <button type="submit" id="onboarding-business-btn" class="btn btn-primary" style="width:100%;">Bilgileri Kaydet</button>
-                </form>
+                    <button type="button" id="onboarding-business-btn" class="btn btn-primary" style="width:100%;">Bilgileri Kaydet</button>
+                </div>
             </div>
         </div>
 
@@ -1740,6 +1743,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="app.js?v=7"></script>
+    <script src="app.js?v=8"></script>
 </body>
 </html>
