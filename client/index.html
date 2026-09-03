@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Burak E-Ticaret Yönetim Sistemi</title>
-    <link rel="stylesheet" href="styles.css?v=11">
+    <link rel="stylesheet" href="styles.css?v=12">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -36,8 +36,9 @@
                     <button type="submit" class="btn btn-primary btn-block">Giriş Yap</button>
                 </form>
                 <div class="login-footer">
-                    <p><a href="#" id="go-to-apply">Kayıt Ol / Sisteme Başvur</a></p>
-                    <p>Varsayılan: admin / EnnerVal1453</p>
+                    <p>Hesabınız yok mu?</p>
+                    <button type="button" id="go-to-apply" class="btn btn-secondary" style="width: 100%;" onclick="if(typeof showApplyScreen==='function'){showApplyScreen();} return false;">Kayıt Ol / Sisteme Başvur</button>
+                    <p style="margin-top: 0.75rem;">Varsayılan: admin / EnnerVal1453</p>
                 </div>
             </div>
         </div>
@@ -80,7 +81,7 @@
                 <div id="apply-message"></div>
                 <div class="login-footer" style="margin-top: 1rem; text-align: center;">
                     <p>Zaten hesabınız var mı?</p>
-                    <button type="button" id="back-to-login" class="btn btn-secondary" style="width: 100%;">Giriş Yapın</button>
+                    <button type="button" id="back-to-login" class="btn btn-secondary" style="width: 100%;" onclick="if(typeof showLoginScreen==='function'){showLoginScreen();} return false;">Giriş Yapın</button>
                 </div>
             </div>
         </div>
@@ -1744,6 +1745,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="app.js?v=11"></script>
+    <script src="app.js?v=12"></script>
 </body>
 </html>

@@ -191,6 +191,10 @@ async function apiRequest(endpoint, options = {}) {
     const data = await response.json();
 
     if (!response.ok) {
+        if (response.status === 401) {
+            alert(data.error || 'Oturum süresi doldu. Lütfen tekrar giriş yapın.');
+            logout();
+        }
         throw new Error(data.error || 'API hatası');
     }
 
@@ -1787,14 +1791,7 @@ function initializeEventListeners() {
     });
 
     // Apply / Onboarding / Account
-    document.getElementById('go-to-apply').addEventListener('click', (e) => {
-        e.preventDefault();
-        showApplyScreen();
-    });
-    document.getElementById('back-to-login').addEventListener('click', (e) => {
-        e.preventDefault();
-        showLoginScreen();
-    });
+    // go-to-apply and back-to-login use inline onclick in index.html
     document.getElementById('apply-form').addEventListener('submit', (e) => {
         e.preventDefault();
         submitApplication();
@@ -2305,6 +2302,7 @@ function loadBusinessProfileForOnboarding() {
 }
 
 async function changeOnboardingPassword() {
+    const btn = document.getElementById('onboarding-password-btn');
     const oldPassword = document.getElementById('onboarding-old-password').value;
     const newPassword = document.getElementById('onboarding-new-password').value;
     if (!oldPassword || !newPassword) {
@@ -2315,6 +2313,7 @@ async function changeOnboardingPassword() {
         showToast('Yeni şifre en az 8 karakter olmalı', 'error');
         return;
     }
+    if (btn) btn.disabled = true;
     try {
         await apiRequest('/users/force-change-password', {
             method: 'POST',
@@ -2328,10 +2327,13 @@ async function changeOnboardingPassword() {
         showToast('Şifre güncellendi. İşletme bilgilerinizi girin.', 'success');
     } catch (error) {
         showToast(error.message || 'Şifre değiştirme hatası', 'error');
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
 async function saveOnboardingBusiness() {
+    const btn = document.getElementById('onboarding-business-btn');
     const required = {
         'İşletme / Dükkan Adı': 'onboarding-business-name',
         'Yetkili Ad Soyad': 'onboarding-authorized-name',
@@ -2348,11 +2350,18 @@ async function saveOnboardingBusiness() {
             return;
         }
     }
-    await saveBusinessProfile('onboarding', () => {
-        showMainApp();
-        loadDashboard();
-        showToast('Sisteme hoş geldiniz!', 'success');
-    });
+    if (btn) btn.disabled = true;
+    try {
+        await saveBusinessProfile('onboarding', () => {
+            showMainApp();
+            loadDashboard();
+            showToast('Sisteme hoş geldiniz!', 'success');
+        });
+    } catch (error) {
+        console.error('saveOnboardingBusiness hatası:', error);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 async function submitApplication() {

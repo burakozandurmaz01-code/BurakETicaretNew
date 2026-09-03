@@ -35,7 +35,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuration
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'burak-eticaret-secret-key-2024-secure-32-byte-key')
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'burak-eticaret-secret-key-2024')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 jwt = JWTManager(app)
 
