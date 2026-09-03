@@ -24,27 +24,9 @@ const modalOverlay = document.getElementById('modal-overlay');
 // Initialize App
 document.addEventListener('DOMContentLoaded', () => {
     checkAuth();
+    updateDashboardStats();
     initializeEventListeners();
-    initializeTheme();
-    loadNetworkInfo();
 });
-
-async function loadNetworkInfo() {
-    try {
-        const response = await fetch(`${window.location.origin}/api/network/info`);
-        if (!response.ok) return;
-        const data = await response.json();
-        const infoEl = document.getElementById('network-info');
-        const urlEl = document.getElementById('network-url');
-        if (infoEl && urlEl && data.url) {
-            urlEl.textContent = data.url;
-            urlEl.href = data.url;
-            infoEl.style.display = 'block';
-        }
-    } catch (error) {
-        console.error('Network info yüklenirken hata:', error);
-    }
-}
 
 // Authentication
 function checkAuth() {

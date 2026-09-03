@@ -2,18 +2,19 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, verify_jwt_in_request
 from werkzeug.exceptions import HTTPException
-import sqlite3
-import bcrypt
 import os
+import re
+import json
 import uuid
+import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
 import hashlib
 import io
 import json
+import bcrypt
 import random
 import re
-import socket
 import string
 import traceback
 from html import escape
@@ -762,7 +763,7 @@ def require_auth_for_api():
         return None
     if not request.path.startswith('/api/'):
         return None
-    if request.path in ('/api/auth/login', '/api/auth/register', '/api/applications', '/api/network/info'):
+    if request.path in ('/api/auth/login', '/api/auth/register', '/api/applications'):
         return None
     try:
         verify_jwt_in_request()
@@ -1164,28 +1165,6 @@ def force_change_password():
     conn.commit()
     conn.close()
     return jsonify({'message': 'Şifre güncellendi. Artık sistemi normal şekilde kullanabilirsiniz.'})
-
-def get_local_ip():
-    try:
-        addrs = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
-        ips = sorted({a[4][0] for a in addrs})
-        for ip in ips:
-            if not ip.startswith('127.'):
-                return ip
-        return ips[0]
-    except Exception:
-        return '127.0.0.1'
-
-@app.route('/api/network/info', methods=['GET'])
-def network_info():
-    port = int(os.environ.get('PORT', 5000))
-    local_ip = get_local_ip()
-    return jsonify({
-        'local_ip': local_ip,
-        'hostname': socket.gethostname(),
-        'port': port,
-        'url': f'http://{local_ip}:{port}'
-    })
 
 # Auth routes
 @app.route('/api/auth/login', methods=['POST'])
@@ -3919,4 +3898,4 @@ init_db()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    app.run(debug=True, host='127.0.0.1', port=port)
