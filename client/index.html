@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Burak E-Ticaret Yönetim Sistemi</title>
-    <link rel="stylesheet" href="styles.css?v=6">
+    <link rel="stylesheet" href="styles.css?v=7">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -101,7 +101,7 @@
                     </div>
                     <button type="button" id="onboarding-password-btn" class="btn btn-primary" style="width:100%;">Şifreyi Güncelle</button>
                 </div>
-                <div id="onboarding-step-2" class="onboarding-step" style="display:none;">
+                <form id="onboarding-business-form" class="onboarding-step" style="display:none;">
                     <h3>İşletme Bilgilerinizi Tamamlayın</h3>
                     <div class="form-group">
                         <label>İşletme / Dükkan Adı *</label>
@@ -147,8 +147,8 @@
                         <label>Logo URL</label>
                         <input type="text" id="onboarding-logo-url" class="form-control">
                     </div>
-                    <button type="button" id="onboarding-business-btn" class="btn btn-primary" style="width:100%;">Bilgileri Kaydet</button>
-                </div>
+                    <button type="submit" id="onboarding-business-btn" class="btn btn-primary" style="width:100%;">Bilgileri Kaydet</button>
+                </form>
             </div>
         </div>
 
@@ -1740,6 +1740,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="app.js?v=6"></script>
+    <script src="app.js?v=7"></script>
 </body>
 </html>

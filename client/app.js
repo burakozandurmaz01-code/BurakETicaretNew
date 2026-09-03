@@ -67,7 +67,7 @@ function showOnboardingScreen(step) {
     onboardingScreen.classList.remove('hidden');
     mainApp.classList.add('hidden');
     document.getElementById('onboarding-step-1').style.display = step === 'password' ? 'block' : 'none';
-    document.getElementById('onboarding-step-2').style.display = step === 'business' ? 'block' : 'none';
+    document.getElementById('onboarding-business-form').style.display = step === 'business' ? 'block' : 'none';
     if (step === 'business') loadBusinessProfileForOnboarding();
 }
 
@@ -1797,7 +1797,8 @@ function initializeEventListeners() {
     document.getElementById('onboarding-password-btn').addEventListener('click', () => {
         changeOnboardingPassword();
     });
-    document.getElementById('onboarding-business-btn').addEventListener('click', () => {
+    document.getElementById('onboarding-business-form').addEventListener('submit', (e) => {
+        e.preventDefault();
         saveOnboardingBusiness();
     });
     document.getElementById('save-account-btn').addEventListener('click', () => {
