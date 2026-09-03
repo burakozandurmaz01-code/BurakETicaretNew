@@ -1803,7 +1803,15 @@ function initializeEventListeners() {
     document.getElementById('save-account-btn').addEventListener('click', () => {
         saveAccountBusiness();
     });
+    document.getElementById('account-business-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveAccountBusiness();
+    });
     document.getElementById('account-change-password-btn').addEventListener('click', () => {
+        changeAccountPassword();
+    });
+    document.getElementById('account-password-form').addEventListener('submit', (e) => {
+        e.preventDefault();
         changeAccountPassword();
     });
     document.getElementById('load-applications-btn').addEventListener('click', () => {

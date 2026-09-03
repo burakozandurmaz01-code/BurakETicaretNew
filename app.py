@@ -5,17 +5,15 @@ from werkzeug.exceptions import HTTPException
 import os
 import re
 import json
+import string
 import uuid
 import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
 import hashlib
 import io
-import json
 import bcrypt
 import random
-import re
-import string
 import traceback
 from html import escape
 from openpyxl import Workbook
@@ -37,7 +35,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuration
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'burak-eticaret-secret-key-2024')
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'burak-eticaret-secret-key-2024-secure-32-byte-key')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 jwt = JWTManager(app)
 
