@@ -177,12 +177,15 @@ input[type="checkbox"] {
 }
 
 /* Login Screen */
-#login-screen {
+#login-screen,
+#apply-screen,
+#onboarding-screen {
     display: flex;
     align-items: center;
     justify-content: center;
     min-height: 100vh;
     background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+    padding: 2rem 1rem;
 }
 
 .login-container {
@@ -193,6 +196,8 @@ input[type="checkbox"] {
     box-shadow: var(--shadow-lg);
     width: 100%;
     max-width: 400px;
+    max-height: 95vh;
+    overflow-y: auto;
 }
 
 .login-header {

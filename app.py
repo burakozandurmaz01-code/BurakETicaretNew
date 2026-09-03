@@ -815,7 +815,11 @@ def index():
 
 @app.route('/<path:path>')
 def serve_static(path):
-    return send_from_directory('client', path)
+    response = make_response(send_from_directory('client', path))
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @app.route('/uploads/<path:path>')
 def serve_uploads(path):
